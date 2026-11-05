@@ -1,6 +1,7 @@
 package ru.funpaymobile.data
 
 enum class OrderStatus(val label: String) {
+    Created("Создан"),
     Paid("Оплачен"),
     InProgress("В работе"),
     Completed("Завершён"),
@@ -14,6 +15,21 @@ data class Order(
     val date: String,
     val amountRub: Int,
     val status: OrderStatus,
+    val description: String,
+    val kind: OrderKind = OrderKind.Sale
+)
+
+enum class OrderKind { Sale, Purchase }
+
+/** Предложение другого продавца на площадке. */
+data class MarketOffer(
+    val id: String,
+    val title: String,
+    val category: String,
+    val priceRub: Int,
+    val sellerName: String,
+    val sellerInfo: String,
+    val stock: Int,
     val description: String
 )
 
@@ -71,6 +87,7 @@ data class Snapshot(
     val chats: List<ChatPreview>,
     val messages: Map<String, List<Message>>,
     val lots: List<Lot>,
+    val market: List<MarketOffer>,
     val operations: List<Operation>,
     val events: List<AppEvent>,
     val profile: Profile
@@ -79,6 +96,7 @@ data class Snapshot(
         get() = orders.count { it.status == OrderStatus.Paid || it.status == OrderStatus.InProgress }
     val salesLast7Total: Int get() = salesLast7Days.sum()
     val categories: List<String> get() = lots.map { it.category }.distinct()
+    val marketCategories: List<String> get() = market.map { it.category }.distinct()
 }
 
 data class AppSettings(

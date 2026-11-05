@@ -39,12 +39,13 @@ import ru.funpaymobile.ui.theme.Green
 import ru.funpaymobile.ui.theme.Muted
 
 @Composable
-fun LotsScreen(data: Snapshot, onOpen: (String) -> Unit) {
+fun LotsScreen(data: Snapshot, onBack: () -> Unit, onOpen: (String) -> Unit) {
     var category by rememberSaveable { mutableStateOf<String?>(null) }
     val shown = data.lots.filter { category == null || it.category == category }
 
+    Column(Modifier.fillMaxSize()) {
+    DetailHeader("Мои предложения", onBack)
     LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { ScreenTitle("Товары", "Демонстрационные предложения") }
         if (data.isDemo) item { DemoBanner() }
         item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 4.dp)) {
@@ -55,6 +56,7 @@ fun LotsScreen(data: Snapshot, onOpen: (String) -> Unit) {
             }
         }
         items(shown, key = { it.id }) { lot -> LotCard(lot) { onOpen(lot.id) } }
+    }
     }
 }
 

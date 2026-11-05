@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Switch
@@ -43,12 +44,13 @@ import ru.funpaymobile.ui.theme.Muted
 import ru.funpaymobile.ui.theme.Orange
 import ru.funpaymobile.ui.theme.Red
 
-const val APP_VERSION = "0.3.0"
+const val APP_VERSION = "0.4.0"
 
 @Composable
 fun MoreScreen(
     data: Snapshot,
     onProfile: () -> Unit,
+    onLots: () -> Unit,
     onHistory: () -> Unit,
     onSettings: () -> Unit,
     onAbout: () -> Unit
@@ -57,6 +59,7 @@ fun MoreScreen(
         item { ScreenTitle("Ещё", "Дополнительно") }
         if (data.isDemo) item { DemoBanner() }
         item { MenuRow("Профиль", Icons.Filled.Person, data.profile.statusText, onProfile) }
+        item { MenuRow("Мои предложения", Icons.Filled.Inventory2, "Демонстрационные товары", onLots) }
         item { MenuRow("История операций", Icons.Filled.History, "Демонстрационные записи", onHistory) }
         item { MenuRow("Настройки", Icons.Filled.Settings, null, onSettings) }
         item { MenuRow("О приложении", Icons.Filled.Info, "Версия $APP_VERSION", onAbout) }

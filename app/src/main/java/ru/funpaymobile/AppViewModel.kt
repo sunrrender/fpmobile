@@ -8,9 +8,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import ru.funpaymobile.data.ChatPreview
 import ru.funpaymobile.data.DemoRepository
 import ru.funpaymobile.data.FunPayRepository
+import ru.funpaymobile.data.MarketOffer
 import ru.funpaymobile.data.Message
+import ru.funpaymobile.data.Order
+import ru.funpaymobile.data.OrderKind
+import ru.funpaymobile.data.OrderStatus
 import ru.funpaymobile.data.SettingsStore
 import ru.funpaymobile.data.Snapshot
 import java.text.SimpleDateFormat
@@ -37,6 +42,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _localMessages = MutableStateFlow<Map<String, List<Message>>>(emptyMap())
     val localMessages: StateFlow<Map<String, List<Message>>> = _localMessages.asStateFlow()
 
+    private val _localOrders = MutableStateFlow<List<Order>>(emptyList())
+    val localOrders: StateFlow<List<Order>> = _localOrders.asStateFlow()
+
+    private val _localChats = MutableStateFlow<List<ChatPreview>>(emptyList())
+    val localChats: StateFlow<List<ChatPreview>> = _localChats.asStateFlow()
+
     init {
         load()
     }
@@ -62,6 +73,39 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val current = _localMessages.value[chatId].orEmpty()
         val msg = Message(System.nanoTime(), clean, fromMe = true, time = time, localOnly = true)
         _localMessages.value = _localMessages.value + (chatId to (current + msg))
+    }
+
+    /**
+     * Создаёт демонстрационный заказ-покупку. Заказ существует только в памяти
+     * приложения: оплата не выполняется, продавцу ничего не отправляется.
+     */
+    fun createOrder(offer: MarketOffer, qty: Int): String {
+        val id = "M-${1001 + _localOrders.value.size}"
+        val date = SimpleDateFormat("dd.MM.yyyy, HH:mm", Locale.getDefault()).format(Date())
+        val order = Order(
+            id = id,
+            title = offer.title,
+            buyer = offer.sellerName,
+            date = date,
+            amountRub = offer.priceRub * qty,
+            status = OrderStatus.Created,
+            description = "Демонстрационный заказ ($qty шт.), создан только на этом устройстве. " +
+                "Оплата не выполнялась, продавцу ничего не отправлено.",
+            kind = OrderKind.Purchase
+        )
+        _localOrders.value = listOf(order) + _localOrders.value
+        return id
+    }
+
+    /** Возвращает id диалога с собеседником; при необходимости создаёт локальный диалог. */
+    fun ensureChat(name: String): String {
+        val demo = (_ui.value as? UiState.Ready)?.data?.chats.orEmpty()
+        demo.firstOrNull { it.name == name }?.let { return it.id }
+        _localChats.value.firstOrNull { it.name == name }?.let { return it.id }
+        val id = "lc${_localChats.value.size + 1}"
+        val chat = ChatPreview(id, name, "Диалог создан на устройстве (демо)", "сейчас", 0)
+        _localChats.value = listOf(chat) + _localChats.value
+        return id
     }
 
     fun setHideBalance(v: Boolean) = store.setHideBalance(v)

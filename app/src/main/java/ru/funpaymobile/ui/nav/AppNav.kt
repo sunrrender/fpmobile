@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -26,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -46,7 +48,9 @@ import ru.funpaymobile.ui.screens.HistoryScreen
 import ru.funpaymobile.ui.screens.HomeScreen
 import ru.funpaymobile.ui.screens.LotDetailScreen
 import ru.funpaymobile.ui.screens.LotsScreen
+import ru.funpaymobile.ui.screens.MarketScreen
 import ru.funpaymobile.ui.screens.MoreScreen
+import ru.funpaymobile.ui.screens.OfferDetailScreen
 import ru.funpaymobile.ui.screens.OrderDetailScreen
 import ru.funpaymobile.ui.screens.OrdersScreen
 import ru.funpaymobile.ui.screens.ProfileScreen
@@ -58,9 +62,9 @@ import ru.funpaymobile.ui.theme.Surface1
 
 private enum class Tab(val route: String, val title: String, val icon: ImageVector) {
     Home("home", "Главная", Icons.Filled.Home),
+    Market("market", "Площадка", Icons.Filled.Storefront),
     Orders("orders", "Заказы", Icons.AutoMirrored.Filled.ReceiptLong),
     Chats("chats", "Чаты", Icons.AutoMirrored.Filled.Chat),
-    Lots("lots", "Товары", Icons.Filled.Inventory2),
     More("more", "Ещё", Icons.Filled.Menu)
 }
 
@@ -78,6 +82,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
     val ui by vm.ui.collectAsState()
     val settings by vm.settings.collectAsState()
     val local by vm.localMessages.collectAsState()
+    val localOrders by vm.localOrders.collectAsState()
+    val localChats by vm.localChats.collectAsState()
 
     val entry by nav.currentBackStackEntryAsState()
     val route = entry?.destination?.route
@@ -114,7 +120,12 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 UiState.Loading -> LoadingView()
                 is UiState.Error -> ErrorView(state.message, onRetry = vm::load)
                 is UiState.Ready -> {
-                    val data = state.data
+                    val data = remember(state.data, localOrders, localChats) {
+                        state.data.copy(
+                            orders = localOrders + state.data.orders,
+                            chats = localChats + state.data.chats
+                        )
+                    }
                     NavHost(
                         navController = nav,
                         startDestination = Tab.Home.route,
@@ -131,13 +142,31 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                                 hideBalance = settings.hideBalance,
                                 onOrders = { nav.goTab("orders") },
                                 onChats = { nav.goTab("chats") },
-                                onLots = { nav.goTab("lots") },
-                                onHistory = { nav.navigate("history") }
+                                onLots = { nav.navigate("lots") },
+                                onMarket = { nav.goTab("market") }
+                            )
+                        }
+                        composable("market") { MarketScreen(data) { nav.navigate("offer/$it") } }
+                        composable("offer/{id}") { e ->
+                            OfferDetailScreen(
+                                data = data,
+                                id = e.arguments?.getString("id"),
+                                onBack = { nav.popBackStack() },
+                                onCreateOrder = { offer, qty ->
+                                    val orderId = vm.createOrder(offer, qty)
+                                    nav.navigate("order/$orderId")
+                                },
+                                onMessage = { name -> nav.navigate("chat/${vm.ensureChat(name)}") }
                             )
                         }
                         composable("orders") { OrdersScreen(data) { nav.navigate("order/$it") } }
                         composable("order/{id}") { e ->
-                            OrderDetailScreen(data, e.arguments?.getString("id")) { nav.popBackStack() }
+                            OrderDetailScreen(
+                                data = data,
+                                id = e.arguments?.getString("id"),
+                                onBack = { nav.popBackStack() },
+                                onMessage = { name -> nav.navigate("chat/${vm.ensureChat(name)}") }
+                            )
                         }
                         composable("chats") { ChatsScreen(data) { nav.navigate("chat/$it") } }
                         composable("chat/{id}") { e ->
@@ -149,7 +178,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                                 onBack = { nav.popBackStack() }
                             )
                         }
-                        composable("lots") { LotsScreen(data) { nav.navigate("lot/$it") } }
+                        composable("lots") { LotsScreen(data, onBack = { nav.popBackStack() }) { nav.navigate("lot/$it") } }
                         composable("lot/{id}") { e ->
                             LotDetailScreen(data, e.arguments?.getString("id")) { nav.popBackStack() }
                         }
@@ -157,6 +186,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                             MoreScreen(
                                 data = data,
                                 onProfile = { nav.navigate("profile") },
+                                onLots = { nav.navigate("lots") },
                                 onHistory = { nav.navigate("history") },
                                 onSettings = { nav.navigate("settings") },
                                 onAbout = { nav.navigate("about") }

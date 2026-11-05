@@ -107,6 +107,7 @@ fun InfoRow(label: String, value: String) {
 @Composable
 fun StatusChip(status: OrderStatus) {
     val color = when (status) {
+        OrderStatus.Created -> Muted
         OrderStatus.Paid -> Orange
         OrderStatus.InProgress -> Accent
         OrderStatus.Completed -> Green

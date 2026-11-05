@@ -19,6 +19,7 @@ import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,7 +52,7 @@ fun HomeScreen(
     onOrders: () -> Unit,
     onChats: () -> Unit,
     onLots: () -> Unit,
-    onHistory: () -> Unit
+    onMarket: () -> Unit
 ) {
     LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { ScreenTitle("Главная", "FunPay Mobile") }
@@ -92,10 +93,10 @@ fun HomeScreen(
         item { SectionLabel("Быстрые действия") }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QuickAction("Площадка", Icons.Filled.Storefront, Modifier.weight(1f), onMarket)
                 QuickAction("Заказы", Icons.AutoMirrored.Filled.ReceiptLong, Modifier.weight(1f), onOrders)
                 QuickAction("Чаты", Icons.AutoMirrored.Filled.Chat, Modifier.weight(1f), onChats)
-                QuickAction("Товары", Icons.Filled.Inventory2, Modifier.weight(1f), onLots)
-                QuickAction("Операции", Icons.Filled.History, Modifier.weight(1f), onHistory)
+                QuickAction("Мои товары", Icons.Filled.Inventory2, Modifier.weight(1f), onLots)
             }
         }
 

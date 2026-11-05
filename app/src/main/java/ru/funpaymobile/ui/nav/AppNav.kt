@@ -1,0 +1,181 @@
+package ru.funpaymobile.ui.nav
+
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import ru.funpaymobile.AppViewModel
+import ru.funpaymobile.UiState
+import ru.funpaymobile.ui.components.ErrorView
+import ru.funpaymobile.ui.components.LoadingView
+import ru.funpaymobile.ui.screens.AboutScreen
+import ru.funpaymobile.ui.screens.ChatDetailScreen
+import ru.funpaymobile.ui.screens.ChatsScreen
+import ru.funpaymobile.ui.screens.HistoryScreen
+import ru.funpaymobile.ui.screens.HomeScreen
+import ru.funpaymobile.ui.screens.LotDetailScreen
+import ru.funpaymobile.ui.screens.LotsScreen
+import ru.funpaymobile.ui.screens.MoreScreen
+import ru.funpaymobile.ui.screens.OrderDetailScreen
+import ru.funpaymobile.ui.screens.OrdersScreen
+import ru.funpaymobile.ui.screens.ProfileScreen
+import ru.funpaymobile.ui.screens.SettingsScreen
+import ru.funpaymobile.ui.theme.Accent
+import ru.funpaymobile.ui.theme.Bg
+import ru.funpaymobile.ui.theme.Muted
+import ru.funpaymobile.ui.theme.Surface1
+
+private enum class Tab(val route: String, val title: String, val icon: ImageVector) {
+    Home("home", "Главная", Icons.Filled.Home),
+    Orders("orders", "Заказы", Icons.AutoMirrored.Filled.ReceiptLong),
+    Chats("chats", "Чаты", Icons.AutoMirrored.Filled.Chat),
+    Lots("lots", "Товары", Icons.Filled.Inventory2),
+    More("more", "Ещё", Icons.Filled.Menu)
+}
+
+private fun NavHostController.goTab(route: String) {
+    navigate(route) {
+        popUpTo(graph.findStartDestination().id) { saveState = true }
+        launchSingleTop = true
+        restoreState = true
+    }
+}
+
+@Composable
+fun AppRoot(vm: AppViewModel = viewModel()) {
+    val nav = rememberNavController()
+    val ui by vm.ui.collectAsState()
+    val settings by vm.settings.collectAsState()
+    val local by vm.localMessages.collectAsState()
+
+    val entry by nav.currentBackStackEntryAsState()
+    val route = entry?.destination?.route
+    val showBar = Tab.entries.any { it.route == route }
+    val anim = settings.animations
+
+    Scaffold(
+        containerColor = Bg,
+        bottomBar = {
+            if (showBar) {
+                NavigationBar(containerColor = Surface1) {
+                    Tab.entries.forEach { tab ->
+                        NavigationBarItem(
+                            selected = route == tab.route,
+                            onClick = { if (route != tab.route) nav.goTab(tab.route) },
+                            icon = { Icon(tab.icon, contentDescription = tab.title) },
+                            label = { Text(tab.title) },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = Accent,
+                                selectedTextColor = Accent,
+                                unselectedIconColor = Muted,
+                                unselectedTextColor = Muted,
+                                indicatorColor = Accent.copy(alpha = 0.18f)
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    ) { inner ->
+        val base = Modifier.fillMaxSize().padding(inner).statusBarsPadding()
+        Box(if (showBar) base else base.navigationBarsPadding()) {
+            when (val state = ui) {
+                UiState.Loading -> LoadingView()
+                is UiState.Error -> ErrorView(state.message, onRetry = vm::load)
+                is UiState.Ready -> {
+                    val data = state.data
+                    NavHost(
+                        navController = nav,
+                        startDestination = Tab.Home.route,
+                        enterTransition = {
+                            if (anim) fadeIn(tween(220)) + slideInHorizontally(tween(260)) { it / 14 } else EnterTransition.None
+                        },
+                        exitTransition = { if (anim) fadeOut(tween(160)) else ExitTransition.None },
+                        popEnterTransition = { if (anim) fadeIn(tween(220)) else EnterTransition.None },
+                        popExitTransition = { if (anim) fadeOut(tween(160)) else ExitTransition.None }
+                    ) {
+                        composable("home") {
+                            HomeScreen(
+                                data = data,
+                                hideBalance = settings.hideBalance,
+                                onOrders = { nav.goTab("orders") },
+                                onChats = { nav.goTab("chats") },
+                                onLots = { nav.goTab("lots") },
+                                onHistory = { nav.navigate("history") }
+                            )
+                        }
+                        composable("orders") { OrdersScreen(data) { nav.navigate("order/$it") } }
+                        composable("order/{id}") { e ->
+                            OrderDetailScreen(data, e.arguments?.getString("id")) { nav.popBackStack() }
+                        }
+                        composable("chats") { ChatsScreen(data) { nav.navigate("chat/$it") } }
+                        composable("chat/{id}") { e ->
+                            ChatDetailScreen(
+                                data = data,
+                                localMessages = local,
+                                id = e.arguments?.getString("id"),
+                                onSend = vm::addLocalMessage,
+                                onBack = { nav.popBackStack() }
+                            )
+                        }
+                        composable("lots") { LotsScreen(data) { nav.navigate("lot/$it") } }
+                        composable("lot/{id}") { e ->
+                            LotDetailScreen(data, e.arguments?.getString("id")) { nav.popBackStack() }
+                        }
+                        composable("more") {
+                            MoreScreen(
+                                data = data,
+                                onProfile = { nav.navigate("profile") },
+                                onHistory = { nav.navigate("history") },
+                                onSettings = { nav.navigate("settings") },
+                                onAbout = { nav.navigate("about") }
+                            )
+                        }
+                        composable("profile") { ProfileScreen(data) { nav.popBackStack() } }
+                        composable("history") { HistoryScreen(data) { nav.popBackStack() } }
+                        composable("settings") {
+                            SettingsScreen(
+                                settings = settings,
+                                onHideBalance = vm::setHideBalance,
+                                onAnimations = vm::setAnimations,
+                                onBack = { nav.popBackStack() }
+                            )
+                        }
+                        composable("about") { AboutScreen { nav.popBackStack() } }
+                    }
+                }
+            }
+        }
+    }
+}

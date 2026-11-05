@@ -1,0 +1,29 @@
+# FunPay Mobile (неофициальный клиент) — v0.3.0
+
+Kotlin + Jetpack Compose + Material 3, тёмная чёрно-фиолетовая тема.
+Приложение **работает в демонстрационном режиме**: все данные вымышлены, сеть не используется.
+
+## Получение APK
+Локально (JDK 17 + Android SDK Platform 35):
+
+    ./gradlew assembleDebug
+    # app/build/outputs/apk/debug/app-debug.apk
+
+Через GitHub Actions: загрузите проект в репозиторий на GitHub → вкладка **Actions** →
+**Build debug APK** → **Run workflow** (или просто сделайте push) → после зелёной сборки
+скачайте артефакт **FunPayMobile-debug-apk** со страницы запуска.
+
+## Установка на телефон
+1. Скопируйте `app-debug.apk` на устройство.
+2. Откройте файл и разрешите установку из этого источника.
+3. Запустите «FunPay Mobile».
+
+## Структура
+- `data/` — модели, интерфейс `FunPayRepository`, `DemoRepository`, `SettingsStore` (SharedPreferences).
+- `AppViewModel` — состояние загрузки/ошибки, локальные сообщения, настройки.
+- `ui/theme`, `ui/components`, `ui/screens`, `ui/nav` — тема, общие компоненты, экраны, навигация.
+
+## Интеграция с FunPay
+Не реализована. Если появится официально разрешённый способ доступа, достаточно добавить вторую
+реализацию `FunPayRepository` и подставить её в `AppViewModel`. Пароли, cookies и токены не должны
+попадать в код, логи или чат.

@@ -59,7 +59,7 @@ fun MarketScreen(data: Snapshot, onOpen: (String) -> Unit, onOpenRoom: (String) 
 
     val filtered = data.market.filter {
         (category == null || it.category == category) &&
-            (query.isBlank() || it.title.contains(query, ignoreCase = true) || it.sellerName.contains(query, ignoreCase = true))
+            (query.isBlank() || it.title.contains(query, ignoreCase = true) || it.category.contains(query, ignoreCase = true) || it.sellerName.contains(query, ignoreCase = true))
     }
     val shown = if (cheapFirst) filtered.sortedBy { it.priceRub } else filtered
 
@@ -71,7 +71,7 @@ fun MarketScreen(data: Snapshot, onOpen: (String) -> Unit, onOpenRoom: (String) 
                 value = query,
                 onValueChange = { query = it },
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Поиск по названию или продавцу") },
+                placeholder = { Text("Поиск: игра, товар или продавец") },
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp)

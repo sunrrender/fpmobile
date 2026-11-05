@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 import ru.funpaymobile.data.ChatPreview
 import ru.funpaymobile.data.DemoRepository
 import ru.funpaymobile.data.FunPayRepository
+import ru.funpaymobile.data.LocalStore
 import ru.funpaymobile.data.MarketOffer
 import ru.funpaymobile.data.Message
 import ru.funpaymobile.data.Order
@@ -33,19 +34,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // Для подключения реальной интеграции замените реализацию здесь.
     private val repository: FunPayRepository = DemoRepository()
     private val store = SettingsStore(app)
+    private val local = LocalStore(app)
+    private val saved = local.load()
 
     val settings = store.state
 
     private val _ui = MutableStateFlow<UiState>(UiState.Loading)
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
-    private val _localMessages = MutableStateFlow<Map<String, List<Message>>>(emptyMap())
+    private val _localMessages = MutableStateFlow<Map<String, List<Message>>>(saved.messages)
     val localMessages: StateFlow<Map<String, List<Message>>> = _localMessages.asStateFlow()
 
-    private val _localOrders = MutableStateFlow<List<Order>>(emptyList())
+    private val _localOrders = MutableStateFlow<List<Order>>(saved.orders)
     val localOrders: StateFlow<List<Order>> = _localOrders.asStateFlow()
 
-    private val _localChats = MutableStateFlow<List<ChatPreview>>(emptyList())
+    private val _localChats = MutableStateFlow<List<ChatPreview>>(saved.chats)
     val localChats: StateFlow<List<ChatPreview>> = _localChats.asStateFlow()
 
     init {
@@ -73,6 +76,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val current = _localMessages.value[chatId].orEmpty()
         val msg = Message(System.nanoTime(), clean, fromMe = true, time = time, localOnly = true)
         _localMessages.value = _localMessages.value + (chatId to (current + msg))
+        persist()
     }
 
     /**
@@ -94,6 +98,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             kind = OrderKind.Purchase
         )
         _localOrders.value = listOf(order) + _localOrders.value
+        persist()
         return id
     }
 
@@ -105,8 +110,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val id = "lc${_localChats.value.size + 1}"
         val chat = ChatPreview(id, name, "Диалог создан на устройстве (демо)", "сейчас", 0)
         _localChats.value = listOf(chat) + _localChats.value
+        persist()
         return id
     }
+
+    private fun persist() = local.save(_localOrders.value, _localChats.value, _localMessages.value)
 
     fun setHideBalance(v: Boolean) = store.setHideBalance(v)
     fun setAnimations(v: Boolean) = store.setAnimations(v)

@@ -45,16 +45,29 @@ import ru.funpaymobile.ui.components.DetailHeader
 import ru.funpaymobile.ui.components.NotFoundView
 import ru.funpaymobile.ui.components.ScreenPadding
 import ru.funpaymobile.ui.components.ScreenTitle
+import ru.funpaymobile.ui.components.SectionLabel
 import ru.funpaymobile.ui.theme.Accent
 import ru.funpaymobile.ui.theme.AccentDeep
 import ru.funpaymobile.ui.theme.Muted
 import ru.funpaymobile.ui.theme.Surface2
 
 @Composable
-fun ChatsScreen(data: Snapshot, onOpen: (String) -> Unit) {
+fun ChatsScreen(data: Snapshot, onOpen: (String) -> Unit, onOpenRoom: (String) -> Unit) {
     LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { ScreenTitle("Чаты", "Демонстрационные диалоги") }
+        item { ScreenTitle("Чаты", "Диалоги и чаты разделов") }
         if (data.isDemo) item { DemoBanner() }
+        item { SectionLabel("Чаты разделов") }
+        items(data.marketCategories, key = { "room-$it" }) { c ->
+            val last = data.rooms[c]?.lastOrNull()
+            AppCard(onClick = { onOpenRoom(c) }) {
+                Text("Чат раздела «$c»", fontWeight = FontWeight.SemiBold)
+                Text(
+                    last?.let { "${it.author}: ${it.text}" } ?: "Пока нет сообщений",
+                    color = Muted, fontSize = 13.sp, maxLines = 1
+                )
+            }
+        }
+        item { SectionLabel("Личные диалоги") }
         items(data.chats, key = { it.id }) { c -> ChatRow(c) { onOpen(c.id) } }
     }
 }
@@ -96,8 +109,52 @@ fun ChatDetailScreen(
         NotFoundView("Диалог", onBack)
         return
     }
-    val messages = data.messages[id].orEmpty() + localMessages[id].orEmpty()
-    var draft by rememberSaveable(id) { mutableStateOf("") }
+    ChatThread(
+        title = chat.name,
+        showDemo = data.isDemo,
+        messages = data.messages[id].orEmpty() + localMessages[id].orEmpty(),
+        threadKey = id,
+        note = "Сообщения сохраняются только на этом устройстве и не отправляются в FunPay.",
+        onSend = { onSend(id, it) },
+        onBack = onBack
+    )
+}
+
+@Composable
+fun RoomChatScreen(
+    data: Snapshot,
+    localMessages: Map<String, List<Message>>,
+    category: String?,
+    onSend: (String, String) -> Unit,
+    onBack: () -> Unit
+) {
+    if (category == null || category !in data.marketCategories) {
+        NotFoundView("Чат раздела", onBack)
+        return
+    }
+    val key = "room:$category"
+    ChatThread(
+        title = "Чат: $category",
+        showDemo = data.isDemo,
+        messages = data.rooms[category].orEmpty() + localMessages[key].orEmpty(),
+        threadKey = key,
+        note = "Демо-чат раздела: сообщения других участников вымышлены, ваши остаются только на этом устройстве.",
+        onSend = { onSend(key, it) },
+        onBack = onBack
+    )
+}
+
+@Composable
+private fun ChatThread(
+    title: String,
+    showDemo: Boolean,
+    messages: List<Message>,
+    threadKey: String,
+    note: String,
+    onSend: (String) -> Unit,
+    onBack: () -> Unit
+) {
+    var draft by rememberSaveable(threadKey) { mutableStateOf("") }
     val listState = rememberLazyListState()
 
     LaunchedEffect(messages.size) {
@@ -105,8 +162,8 @@ fun ChatDetailScreen(
     }
 
     Column(Modifier.fillMaxSize().imePadding()) {
-        DetailHeader(chat.name, onBack)
-        if (data.isDemo) {
+        DetailHeader(title, onBack)
+        if (showDemo) {
             Box(Modifier.padding(horizontal = 16.dp)) { DemoBanner() }
         }
         LazyColumn(
@@ -117,10 +174,7 @@ fun ChatDetailScreen(
         ) {
             items(messages, key = { it.id }) { m -> Bubble(m) }
         }
-        Text(
-            "Сообщения сохраняются только на этом устройстве и не отправляются в FunPay.",
-            color = Muted, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp)
-        )
+        Text(note, color = Muted, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp))
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = draft,
@@ -131,7 +185,7 @@ fun ChatDetailScreen(
                 maxLines = 4
             )
             IconButton(
-                onClick = { onSend(id, draft); draft = "" },
+                onClick = { onSend(draft); draft = "" },
                 enabled = draft.isNotBlank()
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Отправить", tint = if (draft.isNotBlank()) Accent else Muted)
@@ -150,6 +204,9 @@ private fun Bubble(m: Message) {
                 .background(if (m.fromMe) AccentDeep else Surface2)
                 .padding(horizontal = 14.dp, vertical = 9.dp)
         ) {
+            if (!m.fromMe && m.author != null) {
+                Text(m.author, color = Accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            }
             Text(m.text, fontSize = 15.sp)
             Text(
                 if (m.localOnly) "${m.time} · локально" else m.time,

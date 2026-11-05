@@ -1,5 +1,6 @@
 package ru.funpaymobile.ui.nav
 
+import android.net.Uri
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
@@ -44,6 +45,7 @@ import ru.funpaymobile.ui.components.LoadingView
 import ru.funpaymobile.ui.screens.AboutScreen
 import ru.funpaymobile.ui.screens.ChatDetailScreen
 import ru.funpaymobile.ui.screens.ChatsScreen
+import ru.funpaymobile.ui.screens.RoomChatScreen
 import ru.funpaymobile.ui.screens.HistoryScreen
 import ru.funpaymobile.ui.screens.HomeScreen
 import ru.funpaymobile.ui.screens.LotDetailScreen
@@ -146,7 +148,22 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                                 onMarket = { nav.goTab("market") }
                             )
                         }
-                        composable("market") { MarketScreen(data) { nav.navigate("offer/$it") } }
+                        composable("market") {
+                            MarketScreen(
+                                data = data,
+                                onOpen = { nav.navigate("offer/$it") },
+                                onOpenRoom = { nav.navigate("room/${Uri.encode(it)}") }
+                            )
+                        }
+                        composable("room/{cat}") { e ->
+                            RoomChatScreen(
+                                data = data,
+                                localMessages = local,
+                                category = e.arguments?.getString("cat"),
+                                onSend = vm::addLocalMessage,
+                                onBack = { nav.popBackStack() }
+                            )
+                        }
                         composable("offer/{id}") { e ->
                             OfferDetailScreen(
                                 data = data,
@@ -168,7 +185,13 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                                 onMessage = { name -> nav.navigate("chat/${vm.ensureChat(name)}") }
                             )
                         }
-                        composable("chats") { ChatsScreen(data) { nav.navigate("chat/$it") } }
+                        composable("chats") {
+                            ChatsScreen(
+                                data = data,
+                                onOpen = { nav.navigate("chat/$it") },
+                                onOpenRoom = { nav.navigate("room/${Uri.encode(it)}") }
+                            )
+                        }
                         composable("chat/{id}") { e ->
                             ChatDetailScreen(
                                 data = data,

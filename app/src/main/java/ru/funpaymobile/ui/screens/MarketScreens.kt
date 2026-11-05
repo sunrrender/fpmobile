@@ -52,7 +52,7 @@ import ru.funpaymobile.ui.theme.Green
 import ru.funpaymobile.ui.theme.Muted
 
 @Composable
-fun MarketScreen(data: Snapshot, onOpen: (String) -> Unit) {
+fun MarketScreen(data: Snapshot, onOpen: (String) -> Unit, onOpenRoom: (String) -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
     var category by rememberSaveable { mutableStateOf<String?>(null) }
     var cheapFirst by rememberSaveable { mutableStateOf(false) }
@@ -84,6 +84,14 @@ fun MarketScreen(data: Snapshot, onOpen: (String) -> Unit) {
                     FilterChip(selected = category == c, onClick = { category = c }, label = { Text(c) })
                 }
                 item { FilterChip(selected = cheapFirst, onClick = { cheapFirst = !cheapFirst }, label = { Text("Сначала дешёвые") }) }
+            }
+        }
+        category?.let { c ->
+            item {
+                AppCard(onClick = { onOpenRoom(c) }) {
+                    Text("Чат раздела «$c»", fontWeight = FontWeight.SemiBold)
+                    Text("Общее обсуждение участников, не только про продажи", color = Muted, fontSize = 12.sp)
+                }
             }
         }
         if (shown.isEmpty()) {

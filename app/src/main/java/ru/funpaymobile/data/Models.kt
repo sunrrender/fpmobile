@@ -47,7 +47,9 @@ data class Message(
     val fromMe: Boolean,
     val time: String,
     /** true — сообщение существует только на устройстве и никуда не отправляется. */
-    val localOnly: Boolean = false
+    val localOnly: Boolean = false,
+    /** Имя автора для сообщений в общих чатах разделов. */
+    val author: String? = null
 )
 
 data class Lot(
@@ -86,6 +88,8 @@ data class Snapshot(
     val orders: List<Order>,
     val chats: List<ChatPreview>,
     val messages: Map<String, List<Message>>,
+    /** Общие чаты разделов: ключ — название категории. */
+    val rooms: Map<String, List<Message>>,
     val lots: List<Lot>,
     val market: List<MarketOffer>,
     val operations: List<Operation>,

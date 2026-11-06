@@ -501,18 +501,28 @@ class FunPayClient(goldenKey: String) {
      * Оформляет покупку так же, как браузер: отправляет форму со страницы предложения.
      * Редиректы не выполняются: заказ → открываем в приложении, оплата/пополнение → отдаём ссылку пользователю.
      */
-    suspend fun buy(offerUrl: String): BuyOutcome = withContext(Dispatchers.IO) {
+    private fun findBuyForm(offerUrl: String): Element {
         val page = Jsoup.parse(call(offerUrl), "$BASE/")
         requireAuthorized(page)
-        val form = page.select("form").filter { it.selectFirst("input[name=id], input[name=offer_id]") != null }
+        return page.select("form").filter { it.selectFirst("input[name=id], input[name=offer_id]") != null }
             .let { c -> c.firstOrNull { it.attr("action").contains("order") } ?: c.firstOrNull() }
             ?: throw FunPayException("Форма покупки на странице не найдена. Нажмите «Перейти к оплате на FunPay».", FunPayException.Kind.Parse)
+    }
+
+    /** Поля формы покупки (способ оплаты, количество и т. п.), которые должен заполнить пользователь. */
+    suspend fun buyFields(offerUrl: String): List<FormField> = withContext(Dispatchers.IO) {
+        parseForm(findBuyForm(offerUrl))
+    }
+
+    suspend fun buy(offerUrl: String, chosen: Map<String, String>): BuyOutcome = withContext(Dispatchers.IO) {
+        val form = findBuyForm(offerUrl)
         val payload = parseForm(form).mapNotNull { f ->
+            val v = chosen[f.name] ?: f.value
             when {
                 f.name.isBlank() -> null
-                f.type == FieldType.Check -> if (f.value == "on") f.name to "on" else null
-                f.name == "amount" && f.value.isBlank() -> f.name to "1"
-                else -> f.name to f.value
+                f.type == FieldType.Check -> if (v == "on") f.name to "on" else null
+                f.name == "amount" && v.isBlank() -> f.name to "1"
+                else -> f.name to v
             }
         }
         val action = safeUrl(form.absUrl("action").ifBlank { null }) ?: "$BASE/orders/new"

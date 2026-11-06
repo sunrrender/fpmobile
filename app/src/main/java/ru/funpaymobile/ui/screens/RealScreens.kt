@@ -37,6 +37,8 @@ import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import ru.funpaymobile.data.BuyOutcome
+import ru.funpaymobile.data.FieldType
+import ru.funpaymobile.data.FormField
 import ru.funpaymobile.data.MarketCategory
 import ru.funpaymobile.data.MarketGame
 import ru.funpaymobile.data.MarketOffer
@@ -104,7 +106,8 @@ fun RealMarketScreen(
     loadOffers: suspend (String, String) -> Result<List<MarketOffer>>,
     loadOfferInfo: suspend (String) -> Result<List<Pair<String, String>>>,
     loadForms: suspend (String) -> Result<String>,
-    buy: suspend (String) -> Result<BuyOutcome>,
+    buy: suspend (String, Map<String, String>) -> Result<BuyOutcome>,
+    loadBuyFields: suspend (String) -> Result<List<FormField>>,
     loadProfile: suspend (Long) -> Result<UserProfile>,
     onMessageSeller: (MarketOffer) -> Unit
 ) {
@@ -153,6 +156,7 @@ fun RealMarketScreen(
             loadInfo = loadOfferInfo,
             loadForms = loadForms,
             buy = buy,
+            loadBuyFields = loadBuyFields,
             onMessage = if (sel.sellerId != null) ({ onMessageSeller(sel) }) else null,
             onProfile = if (sel.sellerId != null) ({ sellerOf = sel }) else null,
             onBack = { offer = null }
@@ -249,7 +253,8 @@ private fun OfferInfoScreen(
     o: MarketOffer,
     loadInfo: suspend (String) -> Result<List<Pair<String, String>>>,
     loadForms: suspend (String) -> Result<String>,
-    buy: suspend (String) -> Result<BuyOutcome>,
+    buy: suspend (String, Map<String, String>) -> Result<BuyOutcome>,
+    loadBuyFields: suspend (String) -> Result<List<FormField>>,
     onMessage: (() -> Unit)?,
     onProfile: (() -> Unit)?,
     onBack: () -> Unit
@@ -261,6 +266,15 @@ private fun OfferInfoScreen(
     var buyResult by remember(o.id) { mutableStateOf<BuyOutcome?>(null) }
     var buyError by remember(o.id) { mutableStateOf<String?>(null) }
     val buyScope = rememberCoroutineScope()
+    var buyFields by remember(o.id) { mutableStateOf<List<FormField>?>(null) }
+    var buyFieldsError by remember(o.id) { mutableStateOf<String?>(null) }
+    val buyValues = remember(o.id) { androidx.compose.runtime.mutableStateMapOf<String, String>() }
+    LaunchedEffect(confirmBuy) {
+        val url = o.url
+        if (confirmBuy && url != null && buyFields == null) {
+            loadBuyFields(url).fold({ buyFields = it }, { buyFieldsError = it.message ?: "Не удалось загрузить форму покупки" })
+        }
+    }
     var confirmBuy by remember(o.id) { mutableStateOf(false) }
     LaunchedEffect(o.id) {
         o.url?.let { url -> loadInfo(url).onSuccess { info = it } }
@@ -280,14 +294,23 @@ private fun OfferInfoScreen(
                         color = Muted, fontSize = 12.sp
                     )
                     Spacer(Modifier.height(10.dp))
-                    val canBuy = o.priceRub in 1..100
+                    val shown = buyFields.orEmpty().filter { it.type != FieldType.Hidden }
+                    shown.forEach { fld ->
+                        Spacer(Modifier.height(6.dp))
+                        FieldEditor(fld, buyValues[fld.name] ?: fld.value) { buyValues[fld.name] = it }
+                    }
+                    if (buyFields == null && buyFieldsError == null) Text("Загружаю способы оплаты…", color = Muted, fontSize = 12.sp)
+                    buyFieldsError?.let { Text(it, color = Red, fontSize = 12.sp) }
+                    val needChoice = shown.any { it.type == FieldType.Select && (buyValues[it.name] ?: it.value).isBlank() }
+                    if (needChoice) Text("Выберите способ оплаты выше.", color = Muted, fontSize = 11.sp)
+                    val canBuy = o.priceRub in 1..100 && buyFields != null && !needChoice
                     androidx.compose.material3.Button(
                         enabled = canBuy && !buyBusy && buyResult == null,
                         modifier = Modifier.fillMaxWidth(),
                         onClick = {
                             buyBusy = true; buyError = null
                             buyScope.launch {
-                                buy(o.url).fold({ buyResult = it }, { e -> buyError = e.message ?: "Не удалось оформить покупку" })
+                                buy(o.url, buyValues.toMap()).fold({ buyResult = it }, { e -> buyError = e.message ?: "Не удалось оформить покупку" })
                                 buyBusy = false
                             }
                         }

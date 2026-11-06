@@ -238,7 +238,7 @@ fun NewLotScreen(
 }
 
 @Composable
-private fun FieldEditor(field: FormField, value: String, onChange: (String) -> Unit) {
+internal fun FieldEditor(field: FormField, value: String, onChange: (String) -> Unit) {
     val label = field.label + if (field.required) " *" else ""
     when (field.type) {
         FieldType.Text, FieldType.Number -> OutlinedTextField(

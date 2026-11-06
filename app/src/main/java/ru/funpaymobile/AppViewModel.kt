@@ -88,8 +88,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun orderInfo(orderId: String): Result<List<Pair<String, String>>> = guarded { it.orderInfo(orderId) }
     suspend fun offerInfo(url: String): Result<List<Pair<String, String>>> = guarded { it.offerInfo(url) }
     suspend fun lotForm(category: MarketCategory): Result<LotForm> = guarded { it.lotForm(category.url, category.title) }
-    suspend fun buy(url: String): Result<ru.funpaymobile.data.BuyOutcome> =
-        guarded { it.buy(url) }.also { if (it.isSuccess) refreshSilently() }
+    suspend fun buyFields(url: String): Result<List<ru.funpaymobile.data.FormField>> = guarded { it.buyFields(url) }
+    suspend fun buy(url: String, chosen: Map<String, String>): Result<ru.funpaymobile.data.BuyOutcome> =
+        guarded { it.buy(url, chosen) }.also { if (it.isSuccess) refreshSilently() }
     suspend fun offerForms(url: String): Result<String> = guarded { it.offerForms(url) }
     suspend fun userProfile(id: Long): Result<UserProfile> = guarded { it.userProfile(id) }
     suspend fun replyReview(orderId: String, text: String): Result<String> = guarded { it.replyReview(orderId, text) }

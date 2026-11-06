@@ -456,6 +456,15 @@ class FunPayClient(goldenKey: String) {
             if (k.isEmpty() || v.isEmpty()) null else k to v
         }.take(20)
 
+    /** Что видит приложение вместо формы: заголовок, текст страницы, формы и ссылки на создание лота. */
+    private fun noFormMessage(doc: Document, node: String): String {
+        val title = doc.title().take(80)
+        val text = (doc.selectFirst("div.alert, div.content-with-cd, div.content, body"))?.text()?.take(220).orEmpty()
+        val forms = doc.select("form").take(4).joinToString("; ") { f -> (f.attr("action").ifEmpty { "(без action)" }) + " поля:" + f.select("input[name],select[name],textarea[name]").take(8).joinToString(",") { it.attr("name") } }
+        val links = doc.select("a[href*=offerEdit]").take(3).joinToString(", ") { it.attr("href") }
+        return "Не удалось найти форму создания лота в разделе $node. Заголовок: «$title». Текст страницы: «$text». Формы: ${forms.ifEmpty { "нет" }}. Ссылки offerEdit: ${links.ifEmpty { "нет" }}."
+    }
+
     suspend fun lotForm(categoryUrl: String, categoryTitle: String): LotForm = withContext(Dispatchers.IO) {
         val node = Regex("/lots/(\\d+)/?").find(categoryUrl)?.groupValues?.get(1)
             ?: throw FunPayException("Для этого раздела (например, игровая валюта) создайте лот на сайте FunPay.", FunPayException.Kind.Other)
@@ -467,7 +476,7 @@ class FunPayClient(goldenKey: String) {
         requireAuthorizedOrFragment(doc)
         val form = doc.selectFirst("form.form-offer-editor")
             ?: doc.select("form").firstOrNull { it.selectFirst("input[name=offer_id]") != null }
-            ?: throw FunPayException("Не удалось найти форму создания лота (структура сайта могла измениться).", FunPayException.Kind.Parse)
+            ?: throw FunPayException(noFormMessage(doc, node), FunPayException.Kind.Parse)
         val fields = parseForm(form)
         if (fields.none { it.type != FieldType.Hidden }) {
             throw FunPayException("Форма лота пуста или не распознана.", FunPayException.Kind.Parse)

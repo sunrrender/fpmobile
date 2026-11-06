@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -280,42 +281,41 @@ private fun OfferInfoScreen(
         o.url?.let { url -> loadInfo(url).onSuccess { info = it } }
     }
     if (confirmBuy && o.url != null) {
+        val shown = buyFields.orEmpty().filter { it.type != FieldType.Hidden }
+        val unit = o.priceText?.replace(',', '.')?.let { Regex("[0-9]+(\\.[0-9]+)?").find(it)?.value?.toDoubleOrNull() } ?: o.priceRub.toDouble()
+        val amountField = shown.firstOrNull { it.name == "amount" || it.label.contains("Получу", true) }
+        val payField = shown.firstOrNull { it.label.contains("Заплачу", true) }
+        val qty = amountField?.let { buyValues[it.name] ?: it.value }?.trim()?.toIntOrNull() ?: 1
+        val total = unit * qty
+        val totalText = String.format(java.util.Locale.US, "%.2f", total)
+        LaunchedEffect(qty, payField?.name) { if (payField != null) buyValues[payField.name] = totalText }
+        val needChoice = shown.any { it.type == FieldType.Select && (buyValues[it.name] ?: it.value).isBlank() }
+        val qtyOk = qty >= 1 && (o.stock <= 0 || qty <= o.stock)
+        val canBuy = buyFields != null && !needChoice && qtyOk && total <= 100.0
         androidx.compose.material3.AlertDialog(
-            onDismissRequest = { confirmBuy = false },
+            onDismissRequest = { if (!buyBusy) confirmBuy = false },
             title = { Text("Подтвердите покупку") },
             text = {
-                Column {
+                Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
                     InfoRow("Товар", o.title)
                     InfoRow("Продавец", o.sellerName.ifEmpty { "—" })
-                    InfoRow("Сумма", o.priceText ?: "${o.priceRub} ₽")
+                    InfoRow("Цена за 1 шт.", o.priceText ?: "${o.priceRub} ₽")
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Дальше оплата проходит на FunPay: с вашего баланса, если средств хватает, иначе FunPay сам посчитает недостающую сумму и предложит СБП или другой способ. Ссылка откроется только после нажатия кнопки.",
-                        color = Muted, fontSize = 12.sp
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    val shown = buyFields.orEmpty().filter { it.type != FieldType.Hidden }
                     shown.forEach { fld ->
                         Spacer(Modifier.height(6.dp))
                         FieldEditor(fld, buyValues[fld.name] ?: fld.value) { buyValues[fld.name] = it }
                     }
                     if (buyFields == null && buyFieldsError == null) Text("Загружаю способы оплаты…", color = Muted, fontSize = 12.sp)
                     buyFieldsError?.let { Text(it, color = Red, fontSize = 12.sp) }
-                    val needChoice = shown.any { it.type == FieldType.Select && (buyValues[it.name] ?: it.value).isBlank() }
-                    if (needChoice) Text("Выберите способ оплаты выше.", color = Muted, fontSize = 11.sp)
-                    val canBuy = o.priceRub in 1..100 && buyFields != null && !needChoice
-                    androidx.compose.material3.Button(
-                        enabled = canBuy && !buyBusy && buyResult == null,
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = {
-                            buyBusy = true; buyError = null
-                            buyScope.launch {
-                                buy(o.url, buyValues.toMap()).fold({ buyResult = it }, { e -> buyError = e.message ?: "Не удалось оформить покупку" })
-                                buyBusy = false
-                            }
-                        }
-                    ) { Text(if (buyBusy) "Оформляю…" else "Оплатить в приложении") }
-                    if (!canBuy) Text("Покупка в приложении пока ограничена тестовым лимитом 100 ₽.", color = Muted, fontSize = 11.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Итого ≈ $totalText ₽", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        "Это цена × количество без комиссии способа оплаты: точную сумму посчитает FunPay. Если на балансе не хватает денег, он предложит пополнить недостающую сумму; ссылка откроется только после нажатия кнопки.",
+                        color = Muted, fontSize = 11.sp
+                    )
+                    if (needChoice) Text("Выберите способ оплаты.", color = Orange, fontSize = 12.sp)
+                    if (!qtyOk) Text("Укажите количество от 1" + if (o.stock > 0) " до ${o.stock}." else ".", color = Orange, fontSize = 12.sp)
+                    if (total > 100.0) Text("В приложении пока тестовый лимит покупки 100 ₽.", color = Orange, fontSize = 12.sp)
                     buyError?.let { Text(it, color = Red, fontSize = 12.sp) }
                     buyResult?.let { r ->
                         Spacer(Modifier.height(6.dp))
@@ -333,7 +333,19 @@ private fun OfferInfoScreen(
                 }
             },
             confirmButton = {
-                androidx.compose.material3.TextButton(onClick = { confirmBuy = false; buyResult = null; buyError = null }) { Text("Закрыть", color = Accent) }
+                androidx.compose.material3.Button(
+                    enabled = canBuy && !buyBusy && buyResult == null,
+                    onClick = {
+                        buyBusy = true; buyError = null
+                        buyScope.launch {
+                            buy(o.url, buyValues.toMap()).fold({ buyResult = it }, { e -> buyError = e.message ?: "Не удалось оформить покупку" })
+                            buyBusy = false
+                        }
+                    }
+                ) { Text(if (buyBusy) "Оформляю…" else "Оплатить $totalText ₽") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(enabled = !buyBusy, onClick = { confirmBuy = false; buyResult = null; buyError = null }) { Text("Закрыть", color = Accent) }
             }
         )
     }

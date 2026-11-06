@@ -102,6 +102,7 @@ fun RealMarketScreen(
     loadGames: suspend () -> Result<List<MarketGame>>,
     loadOffers: suspend (String, String) -> Result<List<MarketOffer>>,
     loadOfferInfo: suspend (String) -> Result<List<Pair<String, String>>>,
+    loadForms: suspend (String) -> Result<String>,
     loadProfile: suspend (Long) -> Result<UserProfile>,
     onMessageSeller: (MarketOffer) -> Unit
 ) {
@@ -148,6 +149,7 @@ fun RealMarketScreen(
         sel != null -> OfferInfoScreen(
             o = sel,
             loadInfo = loadOfferInfo,
+            loadForms = loadForms,
             onMessage = if (sel.sellerId != null) ({ onMessageSeller(sel) }) else null,
             onProfile = if (sel.sellerId != null) ({ sellerOf = sel }) else null,
             onBack = { offer = null }
@@ -243,12 +245,14 @@ private fun StatusText(text: String, error: Boolean = false, onRetry: (() -> Uni
 private fun OfferInfoScreen(
     o: MarketOffer,
     loadInfo: suspend (String) -> Result<List<Pair<String, String>>>,
+    loadForms: suspend (String) -> Result<String>,
     onMessage: (() -> Unit)?,
     onProfile: (() -> Unit)?,
     onBack: () -> Unit
 ) {
     val uri = LocalUriHandler.current
     var info by remember(o.id) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var forms by remember(o.id) { mutableStateOf<String?>(null) }
     var confirmBuy by remember(o.id) { mutableStateOf(false) }
     LaunchedEffect(o.id) {
         o.url?.let { url -> loadInfo(url).onSuccess { info = it } }
@@ -324,6 +328,17 @@ private fun OfferInfoScreen(
             }
             item {
                 Text("Оплата и оформление покупки выполняются на сайте FunPay.", color = Muted, fontSize = 12.sp)
+            }
+            o.url?.let { url ->
+                item {
+                    val sc = rememberCoroutineScope()
+                    androidx.compose.material3.TextButton(onClick = { sc.launch { forms = loadForms(url).fold({ it }, { e -> "Ошибка: ${e.message}" }) } }) {
+                        Text("Диагностика: форма покупки", color = Muted)
+                    }
+                    forms?.let { d ->
+                        androidx.compose.foundation.text.selection.SelectionContainer { Text(d, color = Muted, fontSize = 10.sp, lineHeight = 13.sp) }
+                    }
+                }
             }
         }
     }

@@ -207,7 +207,12 @@ fun NewLotScreen(
                                     busy = false
                                     confirm = false
                                     var m = e.message ?: "Не удалось создать лот"
+                                    val sent = f.fields.filter { fld -> m.contains(fld.name) }.joinToString("; ") { fld ->
+                                        val vals = payload.filter { it.first == fld.name }.map { it.second }
+                                        "${fld.label}: отправлено ${if (vals.isEmpty()) "ничего" else vals.joinToString("|") { v -> "«$v»" }}, вариантов в форме: ${fld.options.size}"
+                                    }
                                     f.fields.forEach { fld -> m = m.replace(fld.name, fld.label) }
+                                    if (sent.isNotEmpty()) m += "\n[диагностика] $sent"
                                     message = m.replace("[", "").replace("]", "").replace("\"", "")
                                 }
                             )

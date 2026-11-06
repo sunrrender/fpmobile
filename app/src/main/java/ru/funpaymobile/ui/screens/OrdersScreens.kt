@@ -93,14 +93,24 @@ private fun OrderCard(o: Order, onClick: () -> Unit) {
 }
 
 @Composable
-fun OrderDetailScreen(data: Snapshot, id: String?, onBack: () -> Unit, onMessage: (String) -> Unit) {
-    val o = data.orders.firstOrNull { it.id == id }
+fun OrderDetailScreen(
+    data: Snapshot,
+    id: String?,
+    onBack: () -> Unit,
+    onMessage: (Order) -> Unit,
+    loadInfo: (suspend (String) -> Result<List<Pair<String, String>>>)? = null
+) {
+    val o = data.orders.firstOrNull { it.id.removePrefix("#") == id?.removePrefix("#") }
     if (o == null) {
         NotFoundView("Заказ", onBack)
         return
     }
     val purchase = o.kind == OrderKind.Purchase
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    var info by androidx.compose.runtime.remember(o.id) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    if (loadInfo != null) {
+        androidx.compose.runtime.LaunchedEffect(o.id) { loadInfo(o.id).onSuccess { info = it } }
+    }
     Column(Modifier.fillMaxSize()) {
         DetailHeader("Заказ № ${o.id}", onBack)
         LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -124,8 +134,11 @@ fun OrderDetailScreen(data: Snapshot, id: String?, onBack: () -> Unit, onMessage
                     InfoRow("Статус", o.status.label)
                 }
             }
+            if (info.isNotEmpty()) {
+                item { AppCard { info.forEach { (k, v) -> InfoRow(k, v) } } }
+            }
             item {
-                Button(onClick = { onMessage(o.buyer) }, modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = { onMessage(o) }, modifier = Modifier.fillMaxWidth()) {
                     Text(if (purchase) "Написать продавцу" else "Написать заказчику")
                 }
             }

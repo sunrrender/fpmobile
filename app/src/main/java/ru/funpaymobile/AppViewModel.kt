@@ -14,6 +14,8 @@ import ru.funpaymobile.data.FunPayClient
 import ru.funpaymobile.data.FunPayException
 import ru.funpaymobile.data.FunPayRepository
 import ru.funpaymobile.data.LocalStore
+import ru.funpaymobile.data.LotForm
+import ru.funpaymobile.data.MarketCategory
 import ru.funpaymobile.data.MarketGame
 import ru.funpaymobile.data.MarketOffer
 import ru.funpaymobile.data.Message
@@ -65,6 +67,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val chatMessages: StateFlow<Map<String, List<Message>>> = _chatMessages.asStateFlow()
 
     private var marketGamesCache: List<MarketGame>? = null
+    private val dmNames = mutableMapOf<String, String>()
+
+    /** Запоминает имя собеседника для личного диалога, которого ещё нет в списке чатов. */
+    fun registerDm(node: String, name: String) { dmNames[node] = name }
+    fun dmTitle(node: String): String? = dmNames[node]
+
+    private suspend fun <T> guarded(block: suspend (FunPayClient) -> T): Result<T> {
+        val c = client ?: return Result.failure(IllegalStateException("Нет подключения к аккаунту"))
+        return try {
+            Result.success(block(c))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(IllegalStateException(errorText(e)))
+        }
+    }
+
+    suspend fun orderInfo(orderId: String): Result<List<Pair<String, String>>> = guarded { it.orderInfo(orderId) }
+    suspend fun offerInfo(url: String): Result<List<Pair<String, String>>> = guarded { it.offerInfo(url) }
+    suspend fun lotForm(category: MarketCategory): Result<LotForm> = guarded { it.lotForm(category.url, category.title) }
+    suspend fun publishLot(values: List<Pair<String, String>>): Result<String> =
+        guarded { it.publishLot(values) }.also { if (it.isSuccess) refreshSilently() }
 
     init {
         load()

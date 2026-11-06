@@ -39,7 +39,7 @@ import ru.funpaymobile.ui.theme.Green
 import ru.funpaymobile.ui.theme.Muted
 
 @Composable
-fun LotsScreen(data: Snapshot, onBack: () -> Unit, onOpen: (String) -> Unit) {
+fun LotsScreen(data: Snapshot, onBack: () -> Unit, onNew: (() -> Unit)? = null, onOpen: (String) -> Unit) {
     var category by rememberSaveable { mutableStateOf<String?>(null) }
     val shown = data.lots.filter { category == null || it.category == category }
 
@@ -47,6 +47,12 @@ fun LotsScreen(data: Snapshot, onBack: () -> Unit, onOpen: (String) -> Unit) {
     DetailHeader("Мои предложения", onBack)
     LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (data.isDemo) item { DemoBanner() }
+        if (onNew != null) item {
+            androidx.compose.material3.Button(onClick = onNew, modifier = Modifier.fillMaxWidth()) { Text("Создать новый лот") }
+        }
+        if (!data.isDemo && data.lots.isEmpty()) item {
+            Text("Предложений не найдено (или они не загрузились). Нажмите «Создать новый лот» либо обновите экран.", color = Muted, fontSize = 13.sp)
+        }
         item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 4.dp)) {
                 item { FilterChip(selected = category == null, onClick = { category = null }, label = { Text("Все") }) }

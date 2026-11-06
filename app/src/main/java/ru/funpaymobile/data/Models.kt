@@ -18,7 +18,8 @@ data class Order(
     val description: String,
     val kind: OrderKind = OrderKind.Sale,
     val priceText: String? = null,
-    val webUrl: String? = null
+    val webUrl: String? = null,
+    val counterpartId: Long? = null
 )
 
 enum class OrderKind { Sale, Purchase }
@@ -34,7 +35,8 @@ data class MarketOffer(
     val stock: Int,
     val description: String,
     val priceText: String? = null,
-    val url: String? = null
+    val url: String? = null,
+    val sellerId: Long? = null
 )
 
 data class MarketCategory(val title: String, val url: String)
@@ -86,7 +88,8 @@ data class AppEvent(val id: String, val text: String, val time: String)
 data class Profile(
     val displayName: String,
     val connected: Boolean,
-    val statusText: String
+    val statusText: String,
+    val userId: Long = 0
 )
 
 /** Полный набор данных, который приложение показывает на экранах. */
@@ -127,3 +130,19 @@ fun Int.rub(): String {
     val grouped = digits.reversed().chunked(3).joinToString(" ").reversed()
     return "$sign$grouped ₽"
 }
+
+enum class FieldType { Text, Number, Area, Select, Check, Hidden }
+
+data class FormOption(val value: String, val label: String)
+
+/** Поле формы создания лота, разобранное со страницы FunPay. */
+data class FormField(
+    val name: String,
+    val label: String,
+    val type: FieldType,
+    val value: String,
+    val options: List<FormOption> = emptyList(),
+    val required: Boolean = false
+)
+
+data class LotForm(val categoryTitle: String, val fields: List<FormField>)

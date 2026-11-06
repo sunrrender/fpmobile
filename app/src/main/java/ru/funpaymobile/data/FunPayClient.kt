@@ -183,7 +183,8 @@ class FunPayClient(goldenKey: String) {
                 description = el.selectFirst("div.order-desc div.text-muted")?.text()?.trim().orEmpty(),
                 kind = kind,
                 priceText = priceStr,
-                webUrl = safeUrl(el.absUrl("href"))
+                webUrl = safeUrl(el.absUrl("href")),
+                counterpartId = userIdFrom(el.selectFirst("div.media-user-name span")?.attr("data-href"))
             )
         }.distinctBy { it.id }
     }
@@ -191,6 +192,24 @@ class FunPayClient(goldenKey: String) {
     // ---------------------------------------------------------------- чаты
 
     suspend fun chats(): List<ChatPreview> = withContext(Dispatchers.IO) {
+        var runnerError: FunPayException? = null
+        val fromRunner = try {
+            chatsFromRunner()
+        } catch (e: FunPayException) {
+            if (e.kind == FunPayException.Kind.InvalidKey) throw e
+            runnerError = e
+            emptyList()
+        }
+        if (fromRunner.isNotEmpty()) return@withContext fromRunner
+        // Запасной путь: список диалогов со страницы чатов.
+        val doc = Jsoup.parse(call("$BASE/chat/"), "$BASE/")
+        requireAuthorized(doc)
+        val list = parseContacts(doc)
+        if (list.isEmpty() && runnerError != null) throw runnerError
+        list
+    }
+
+    private fun chatsFromRunner(): List<ChatPreview> {
         val objects = JSONArray().put(
             JSONObject().put("type", "chat_bookmarks").put("id", userId).put("tag", randomTag()).put("data", false)
         )
@@ -203,8 +222,12 @@ class FunPayClient(goldenKey: String) {
                 html = o.optJSONObject("data")?.optString("html")
             }
         }
-        if (html.isNullOrEmpty()) return@withContext emptyList()
-        Jsoup.parse(html).select("a.contact-item").mapNotNull { a ->
+        if (html.isNullOrEmpty()) return emptyList()
+        return parseContacts(Jsoup.parse(html))
+    }
+
+    private fun parseContacts(doc: Document): List<ChatPreview> =
+        doc.select("a.contact-item").mapNotNull { a ->
             val id = a.attr("data-id").trim()
             if (id.isEmpty()) return@mapNotNull null
             ChatPreview(
@@ -215,18 +238,20 @@ class FunPayClient(goldenKey: String) {
                 unread = if (a.hasClass("unread")) 1 else 0
             )
         }.distinctBy { it.id }
-    }
 
     suspend fun chatMessages(nodeId: String): List<Message> = withContext(Dispatchers.IO) {
         val doc = Jsoup.parse(call("$BASE/chat/?node=${java.net.URLEncoder.encode(nodeId, "UTF-8")}"), "$BASE/")
         requireAuthorized(doc)
+        parseMessages(doc)
+    }
+
+    private fun parseMessages(doc: Document): List<Message> {
         var lastAuthor = ""
         var index = 0L
-        doc.select("div.chat-msg-item").mapNotNull { item ->
+        return doc.select("div.chat-msg-item").mapNotNull { item ->
             index++
             item.selectFirst(".chat-msg-author-link")?.text()?.trim()?.takeIf { it.isNotEmpty() }?.let { lastAuthor = it }
-            val textEl = item.selectFirst(".chat-msg-text")
-            var text = textEl?.wholeText()?.trim().orEmpty()
+            var text = item.selectFirst(".chat-msg-text")?.wholeText()?.trim().orEmpty()
             if (text.isEmpty() && item.selectFirst(".chat-img, .chat-msg-image, img") != null) text = "[вложение]"
             if (text.isEmpty()) return@mapNotNull null
             val dateEl = item.selectFirst(".chat-msg-date")
@@ -323,9 +348,117 @@ class FunPayClient(goldenKey: String) {
                 stock = el.selectFirst("div.tc-amount")?.text()?.filter { it.isDigit() }?.toIntOrNull() ?: 0,
                 description = "",
                 priceText = priceStr,
-                url = url
+                url = url,
+                sellerId = userIdFrom((el.selectFirst("div.tc-seller div.media-user-name span") ?: el.selectFirst("div.media-user-name span"))?.attr("data-href"))
             )
         }
+    }
+
+    // ---------------------------------------------------------------- заказ, предложение, новый лот
+
+    /** Поля заказа со страницы заказа (название параметра → значение). */
+    suspend fun orderInfo(orderId: String): List<Pair<String, String>> = withContext(Dispatchers.IO) {
+        val id = orderId.removePrefix("#").filter { it.isLetterOrDigit() }
+        if (id.isEmpty()) return@withContext emptyList()
+        val doc = Jsoup.parse(call("$BASE/orders/$id/"), "$BASE/")
+        requireAuthorized(doc)
+        paramItems(doc)
+    }
+
+    suspend fun offerInfo(offerUrl: String): List<Pair<String, String>> = withContext(Dispatchers.IO) {
+        paramItems(Jsoup.parse(call(offerUrl), "$BASE/"))
+    }
+
+    private fun paramItems(doc: Document): List<Pair<String, String>> =
+        doc.select("div.param-item").mapNotNull { p ->
+            val k = p.selectFirst("h5")?.text()?.trim().orEmpty()
+            val v = (p.selectFirst("div") ?: p).text().trim().removePrefix(k).trim()
+            if (k.isEmpty() || v.isEmpty()) null else k to v
+        }.take(20)
+
+    suspend fun lotForm(categoryUrl: String, categoryTitle: String): LotForm = withContext(Dispatchers.IO) {
+        val node = Regex("/lots/(\\d+)/?").find(categoryUrl)?.groupValues?.get(1)
+            ?: throw FunPayException("Для этого раздела (например, игровая валюта) создайте лот на сайте FunPay.", FunPayException.Kind.Other)
+        var body = call("$BASE/lots/offerEdit?node=$node")
+        if (body.trimStart().startsWith("{")) {
+            body = try { JSONObject(body).optString("html") } catch (e: Exception) { "" }
+        }
+        val doc = Jsoup.parse(body, "$BASE/")
+        requireAuthorizedOrFragment(doc)
+        val form = doc.selectFirst("form.form-offer-editor")
+            ?: doc.select("form").firstOrNull { it.selectFirst("input[name=offer_id]") != null }
+            ?: throw FunPayException("Не удалось найти форму создания лота (структура сайта могла измениться).", FunPayException.Kind.Parse)
+        val fields = parseForm(form)
+        if (fields.none { it.type != FieldType.Hidden }) {
+            throw FunPayException("Форма лота пуста или не распознана.", FunPayException.Kind.Parse)
+        }
+        LotForm(categoryTitle, fields)
+    }
+
+    private fun requireAuthorizedOrFragment(doc: Document) {
+        // Ответ может быть фрагментом без шапки сайта; полностью отсутствующая форма обрабатывается выше.
+        if (doc.selectFirst("form") == null && doc.selectFirst("div.user-link-name") == null) {
+            throw FunPayException("Сессия FunPay недействительна: войдите заново.", FunPayException.Kind.InvalidKey)
+        }
+    }
+
+    private fun parseForm(form: Element): List<FormField> {
+        val out = mutableListOf<FormField>()
+        val radios = linkedMapOf<String, MutableList<Element>>()
+        fun labelFor(el: Element, name: String): String {
+            val byFor = el.id().takeIf { it.isNotEmpty() }?.let { form.selectFirst("label[for=$it]")?.text() }
+            return (byFor ?: el.closest(".form-group")?.selectFirst("label")?.text() ?: el.attr("placeholder"))
+                .trim().ifEmpty { name }
+        }
+        for (el in form.select("input, textarea, select")) {
+            val name = el.attr("name")
+            if (name.isBlank()) continue
+            when (el.tagName()) {
+                "textarea" -> out += FormField(name, labelFor(el, name), FieldType.Area, el.text(), required = el.hasAttr("required"))
+                "select" -> {
+                    val opts = el.select("option").map { FormOption(it.attr("value"), it.text().trim()) }
+                    val sel = el.selectFirst("option[selected]")?.attr("value") ?: opts.firstOrNull()?.value.orEmpty()
+                    out += FormField(name, labelFor(el, name), FieldType.Select, sel, opts, el.hasAttr("required"))
+                }
+                else -> when (el.attr("type").lowercase()) {
+                    "hidden" -> out += FormField(name, name, FieldType.Hidden, el.attr("value"))
+                    "checkbox" -> out += FormField(name, labelFor(el, name), FieldType.Check, if (el.hasAttr("checked")) "on" else "")
+                    "radio" -> radios.getOrPut(name) { mutableListOf() }.add(el)
+                    "submit", "button", "file", "image", "reset" -> Unit
+                    "number" -> out += FormField(name, labelFor(el, name), FieldType.Number, el.attr("value"), required = el.hasAttr("required"))
+                    else -> out += FormField(name, labelFor(el, name), FieldType.Text, el.attr("value"), required = el.hasAttr("required"))
+                }
+            }
+        }
+        for ((name, els) in radios) {
+            val opts = els.map { r -> FormOption(r.attr("value"), (r.parent()?.text()?.trim()).orEmpty().ifEmpty { r.attr("value") }) }
+            val sel = els.firstOrNull { it.hasAttr("checked") }?.attr("value") ?: els.first().attr("value")
+            out += FormField(name, labelFor(els.first(), name), FieldType.Select, sel, opts)
+        }
+        return out
+    }
+
+    /** Публикует лот: отправляет заполненную форму на FunPay. Возвращает сообщение об успехе. */
+    suspend fun publishLot(values: List<Pair<String, String>>): String = withContext(Dispatchers.IO) {
+        if (System.currentTimeMillis() - lastLogin > SESSION_TTL_MS) loginSync()
+        val fb = FormBody.Builder()
+        values.forEach { (k, v) -> fb.add(k, v) }
+        if (values.none { it.first == "csrf_token" }) fb.add("csrf_token", csrf)
+        if (values.none { it.first == "location" }) fb.add("location", "trade")
+        val body = call("$BASE/lots/offerSave", fb.build(), ajax = true)
+        val resp = try {
+            JSONObject(body)
+        } catch (e: Exception) {
+            throw FunPayException("FunPay вернул неожиданный ответ при сохранении лота.", FunPayException.Kind.Parse)
+        }
+        val err = resp.opt("error")
+        val failed = err != null && err != JSONObject.NULL && err != false && err != 0
+        val errs = resp.optJSONArray("errors")
+        if (failed || (errs != null && errs.length() > 0)) {
+            val msg = resp.optString("msg").ifEmpty { errs?.toString().orEmpty() }.ifEmpty { "FunPay отклонил лот. Проверьте заполнение полей." }
+            throw FunPayException(msg, FunPayException.Kind.Other)
+        }
+        "Лот отправлен на FunPay"
     }
 
     // ---------------------------------------------------------------- вспомогательное
@@ -348,6 +481,8 @@ class FunPayClient(goldenKey: String) {
         const val SESSION_TTL_MS = 20 * 60 * 1000L
         // Печатные ASCII-символы, кроме пробела, кавычки, запятой, точки с запятой и обратной косой черты.
         val KEY_REGEX = Regex("[\\x21\\x23-\\x2B\\x2D-\\x3A\\x3C-\\x5B\\x5D-\\x7E]{8,128}")
+
+        fun userIdFrom(href: String?): Long? = href?.let { Regex("/users/(\\d+)").find(it)?.groupValues?.get(1)?.toLongOrNull() }
 
         fun cleanText(s: String): String = s.replace(' ', ' ').trim()
 

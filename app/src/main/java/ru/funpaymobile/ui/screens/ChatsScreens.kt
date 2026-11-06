@@ -52,10 +52,18 @@ import ru.funpaymobile.ui.theme.Muted
 import ru.funpaymobile.ui.theme.Surface2
 
 @Composable
-fun ChatsScreen(data: Snapshot, onOpen: (String) -> Unit, onOpenRoom: (String) -> Unit) {
+fun ChatsScreen(data: Snapshot, onOpen: (String) -> Unit, onOpenRoom: (String) -> Unit, onRefresh: () -> Unit = {}) {
+    if (!data.isDemo) LaunchedEffect(Unit) { onRefresh() }
     LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { ScreenTitle("Чаты", "Диалоги и чаты разделов") }
         if (data.isDemo) item { DemoBanner() }
+        if (!data.isDemo) item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Диалогов: ${data.chats.size}", color = Muted, fontSize = 12.sp)
+                androidx.compose.material3.TextButton(onClick = onRefresh) { Text("Обновить") }
+            }
+        }
+        data.notice?.let { n -> item { AppCard { Text(n, color = ru.funpaymobile.ui.theme.Orange, fontSize = 12.sp) } } }
         if (data.marketCategories.isNotEmpty()) item { SectionLabel("Чаты разделов") }
         items(data.marketCategories, key = { "room-$it" }) { c ->
             val last = data.rooms[c]?.lastOrNull()

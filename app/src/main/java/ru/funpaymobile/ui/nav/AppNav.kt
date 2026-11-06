@@ -50,6 +50,7 @@ import ru.funpaymobile.ui.screens.RoomChatScreen
 import ru.funpaymobile.ui.screens.HistoryScreen
 import ru.funpaymobile.ui.screens.HomeScreen
 import ru.funpaymobile.ui.screens.LoginScreen
+import ru.funpaymobile.ui.screens.NewLotScreen
 import ru.funpaymobile.ui.screens.LotDetailScreen
 import ru.funpaymobile.ui.screens.RealChatScreen
 import ru.funpaymobile.ui.screens.RealMarketScreen
@@ -155,15 +156,19 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                             state.data
                         }
                     }
-                    val openChatWith: (String) -> Unit = { name ->
-                        if (data.isDemo) {
-                            nav.navigate("chat/${vm.ensureChat(name)}")
+                    val openChatWith: (String) -> Unit = { name -> nav.navigate("chat/${vm.ensureChat(name)}") }
+                    // Реальный режим: личный диалог с пользователем (существующий из списка или новый users-A-B).
+                    val openDm: (Long?, String) -> Unit = { uid, name ->
+                        val existing = data.chats.firstOrNull { it.name == name }
+                        val me = data.profile.userId
+                        if (existing != null) {
+                            nav.navigate("chat/${existing.id}")
+                        } else if (uid != null && me != 0L) {
+                            val node = "users-${minOf(uid, me)}-${maxOf(uid, me)}"
+                            vm.registerDm(node, name)
+                            nav.navigate("chat/$node")
                         } else {
-                            val chat = data.chats.firstOrNull { it.name == name }
-                            if (chat != null) nav.navigate("chat/${chat.id}")
-                            else android.widget.Toast.makeText(
-                                context, "Диалог не найден в списке: откройте заказ на сайте", android.widget.Toast.LENGTH_LONG
-                            ).show()
+                            android.widget.Toast.makeText(context, "Не удалось определить собеседника", android.widget.Toast.LENGTH_LONG).show()
                         }
                     }
                     NavHost(
@@ -187,7 +192,12 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                             )
                         }
                         composable("market") {
-                            if (!data.isDemo) RealMarketScreen(loadGames = vm::marketGames, loadOffers = vm::marketOffers) else MarketScreen(
+                            if (!data.isDemo) RealMarketScreen(
+                                loadGames = vm::marketGames,
+                                loadOffers = vm::marketOffers,
+                                loadOfferInfo = vm::offerInfo,
+                                onMessageSeller = { o -> openDm(o.sellerId, o.sellerName) }
+                            ) else MarketScreen(
                                 data = data,
                                 onOpen = { nav.navigate("offer/$it") },
                                 onOpenRoom = { nav.navigate("room/${Uri.encode(it)}") }
@@ -214,20 +224,22 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                                 onMessage = { name -> nav.navigate("chat/${vm.ensureChat(name)}") }
                             )
                         }
-                        composable("orders") { OrdersScreen(data) { nav.navigate("order/$it") } }
+                        composable("orders") { OrdersScreen(data) { nav.navigate("order/${it.removePrefix("#")}") } }
                         composable("order/{id}") { e ->
                             OrderDetailScreen(
                                 data = data,
                                 id = e.arguments?.getString("id"),
                                 onBack = { nav.popBackStack() },
-                                onMessage = { name -> openChatWith(name) }
+                                onMessage = { order -> if (data.isDemo) openChatWith(order.buyer) else openDm(order.counterpartId, order.buyer) },
+                                loadInfo = if (data.isDemo) null else vm::orderInfo
                             )
                         }
                         composable("chats") {
                             ChatsScreen(
                                 data = data,
                                 onOpen = { nav.navigate("chat/$it") },
-                                onOpenRoom = { nav.navigate("room/${Uri.encode(it)}") }
+                                onOpenRoom = { nav.navigate("room/${Uri.encode(it)}") },
+                                onRefresh = vm::refreshSilently
                             )
                         }
                         composable("chat/{id}") { e ->
@@ -243,6 +255,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                                 RealChatScreen(
                                     data = data,
                                     id = e.arguments?.getString("id"),
+                                    title = e.arguments?.getString("id")?.let(vm::dmTitle),
                                     messages = chatMessages,
                                     refresh = vm::refreshChat,
                                     send = vm::sendChat,
@@ -250,7 +263,22 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                                 )
                             }
                         }
-                        composable("lots") { LotsScreen(data, onBack = { nav.popBackStack() }) { nav.navigate("lot/$it") } }
+                        composable("lots") {
+                            LotsScreen(
+                                data = data,
+                                onBack = { nav.popBackStack() },
+                                onNew = if (data.isDemo) null else ({ nav.navigate("newlot") })
+                            ) { nav.navigate("lot/$it") }
+                        }
+                        composable("newlot") {
+                            NewLotScreen(
+                                loadGames = vm::marketGames,
+                                loadForm = vm::lotForm,
+                                publish = vm::publishLot,
+                                onBack = { nav.popBackStack() },
+                                onPublished = { nav.popBackStack() }
+                            )
+                        }
                         composable("lot/{id}") { e ->
                             LotDetailScreen(data, e.arguments?.getString("id")) { nav.popBackStack() }
                         }

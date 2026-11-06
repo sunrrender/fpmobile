@@ -43,6 +43,7 @@ import ru.funpaymobile.data.Snapshot
 import ru.funpaymobile.ui.components.AppCard
 import ru.funpaymobile.ui.components.Chip
 import ru.funpaymobile.ui.components.DetailHeader
+import ru.funpaymobile.ui.components.InfoRow
 import ru.funpaymobile.ui.components.NotFoundView
 import ru.funpaymobile.ui.components.ScreenPadding
 import ru.funpaymobile.ui.components.ScreenTitle
@@ -56,16 +57,17 @@ import ru.funpaymobile.ui.theme.Red
 fun RealChatScreen(
     data: Snapshot,
     id: String?,
+    title: String?,
     messages: Map<String, List<Message>>,
     refresh: suspend (String) -> String?,
     send: suspend (String, String) -> String?,
     onBack: () -> Unit
 ) {
-    val chat = data.chats.firstOrNull { it.id == id }
-    if (chat == null || id == null) {
+    if (id == null) {
         NotFoundView("Диалог", onBack)
         return
     }
+    val chatTitle = data.chats.firstOrNull { it.id == id }?.name ?: title ?: "Диалог"
     var error by remember(id) { mutableStateOf<String?>(null) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val scope = rememberCoroutineScope()
@@ -80,7 +82,7 @@ fun RealChatScreen(
     }
 
     ChatThread(
-        title = chat.name,
+        title = chatTitle,
         showDemo = false,
         messages = messages[id].orEmpty(),
         threadKey = "real-$id",
@@ -94,7 +96,9 @@ fun RealChatScreen(
 @Composable
 fun RealMarketScreen(
     loadGames: suspend () -> Result<List<MarketGame>>,
-    loadOffers: suspend (String, String) -> Result<List<MarketOffer>>
+    loadOffers: suspend (String, String) -> Result<List<MarketOffer>>,
+    loadOfferInfo: suspend (String) -> Result<List<Pair<String, String>>>,
+    onMessageSeller: (MarketOffer) -> Unit
 ) {
     val uri = LocalUriHandler.current
     var games by remember { mutableStateOf<List<MarketGame>?>(null) }
@@ -106,6 +110,7 @@ fun RealMarketScreen(
     var offersError by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     var offersReload by remember { mutableStateOf(0) }
+    var offer by remember { mutableStateOf<MarketOffer?>(null) }
 
     LaunchedEffect(reload) {
         gamesError = null
@@ -118,12 +123,19 @@ fun RealMarketScreen(
         loadOffers(c.url, c.title).fold({ offers = it }, { offersError = it.message ?: "Ошибка загрузки" })
     }
     BackHandler(enabled = game != null) {
-        if (category != null) { category = null; query = "" } else { game = null; query = "" }
+        if (offer != null) { offer = null } else if (category != null) { category = null; query = "" } else { game = null; query = "" }
     }
 
     val g = game
     val c = category
+    val sel = offer
     when {
+        sel != null -> OfferInfoScreen(
+            o = sel,
+            loadInfo = loadOfferInfo,
+            onMessage = if (sel.sellerId != null) ({ onMessageSeller(sel) }) else null,
+            onBack = { offer = null }
+        )
         g == null -> LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item { ScreenTitle("Площадка", "Игры и разделы FunPay") }
             item {
@@ -178,7 +190,7 @@ fun RealMarketScreen(
                         list.filter { query.isBlank() || it.title.contains(query, true) || it.sellerName.contains(query, true) },
                         key = { it.id }
                     ) { o ->
-                        AppCard(onClick = { o.url?.let(uri::openUri) }) {
+                        AppCard(onClick = { offer = o }) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Text(o.sellerName.ifEmpty { "Продавец" }, color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
                                 if (o.stock > 0) Chip("В наличии: ${o.stock}", Green)
@@ -202,6 +214,60 @@ private fun StatusText(text: String, error: Boolean = false, onRetry: (() -> Uni
         if (onRetry != null) {
             Spacer(Modifier.height(8.dp))
             androidx.compose.material3.OutlinedButton(onClick = onRetry) { Text("Повторить") }
+        }
+    }
+}
+
+@Composable
+private fun OfferInfoScreen(
+    o: MarketOffer,
+    loadInfo: suspend (String) -> Result<List<Pair<String, String>>>,
+    onMessage: (() -> Unit)?,
+    onBack: () -> Unit
+) {
+    val uri = LocalUriHandler.current
+    var info by remember(o.id) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    LaunchedEffect(o.id) {
+        o.url?.let { url -> loadInfo(url).onSuccess { info = it } }
+    }
+    Column(Modifier.fillMaxSize()) {
+        DetailHeader("Предложение") { onBack() }
+        LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            item {
+                AppCard {
+                    Text(o.title, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
+                    Spacer(Modifier.height(6.dp))
+                    Text(o.priceText ?: "${o.priceRub} ₽", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Accent)
+                }
+            }
+            item {
+                AppCard {
+                    InfoRow("Продавец", o.sellerName.ifEmpty { "—" })
+                    if (o.sellerInfo.isNotEmpty()) InfoRow("О продавце", o.sellerInfo)
+                    if (o.stock > 0) InfoRow("В наличии", "${o.stock} шт.")
+                    InfoRow("Раздел", o.category)
+                }
+            }
+            if (info.isNotEmpty()) {
+                item { AppCard { info.forEach { (k, v) -> InfoRow(k, v) } } }
+            }
+            if (onMessage != null) {
+                item {
+                    androidx.compose.material3.Button(onClick = onMessage, modifier = Modifier.fillMaxWidth()) {
+                        Text("Написать продавцу")
+                    }
+                }
+            }
+            o.url?.let { url ->
+                item {
+                    androidx.compose.material3.OutlinedButton(onClick = { uri.openUri(url) }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Открыть на FunPay для покупки")
+                    }
+                }
+            }
+            item {
+                Text("Оплата и оформление покупки выполняются на сайте FunPay.", color = Muted, fontSize = 12.sp)
+            }
         }
     }
 }

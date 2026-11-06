@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,7 +41,9 @@ import ru.funpaymobile.data.MarketGame
 import ru.funpaymobile.data.MarketOffer
 import ru.funpaymobile.data.Message
 import ru.funpaymobile.data.Snapshot
+import ru.funpaymobile.data.UserProfile
 import ru.funpaymobile.ui.components.AppCard
+import ru.funpaymobile.ui.components.Avatar
 import ru.funpaymobile.ui.components.Chip
 import ru.funpaymobile.ui.components.DetailHeader
 import ru.funpaymobile.ui.components.InfoRow
@@ -50,6 +53,7 @@ import ru.funpaymobile.ui.components.ScreenTitle
 import ru.funpaymobile.ui.theme.Accent
 import ru.funpaymobile.ui.theme.Green
 import ru.funpaymobile.ui.theme.Muted
+import ru.funpaymobile.ui.theme.Orange
 import ru.funpaymobile.ui.theme.Red
 
 /** Реальный чат: сообщения подгружаются с FunPay каждые несколько секунд, пока экран открыт. */
@@ -98,6 +102,7 @@ fun RealMarketScreen(
     loadGames: suspend () -> Result<List<MarketGame>>,
     loadOffers: suspend (String, String) -> Result<List<MarketOffer>>,
     loadOfferInfo: suspend (String) -> Result<List<Pair<String, String>>>,
+    loadProfile: suspend (Long) -> Result<UserProfile>,
     onMessageSeller: (MarketOffer) -> Unit
 ) {
     val uri = LocalUriHandler.current
@@ -111,6 +116,7 @@ fun RealMarketScreen(
     var query by remember { mutableStateOf("") }
     var offersReload by remember { mutableStateOf(0) }
     var offer by remember { mutableStateOf<MarketOffer?>(null) }
+    var sellerOf by remember { mutableStateOf<MarketOffer?>(null) }
 
     LaunchedEffect(reload) {
         gamesError = null
@@ -123,17 +129,27 @@ fun RealMarketScreen(
         loadOffers(c.url, c.title).fold({ offers = it }, { offersError = it.message ?: "Ошибка загрузки" })
     }
     BackHandler(enabled = game != null) {
-        if (offer != null) { offer = null } else if (category != null) { category = null; query = "" } else { game = null; query = "" }
+        if (sellerOf != null) { sellerOf = null } else if (offer != null) { offer = null } else if (category != null) { category = null; query = "" } else { game = null; query = "" }
     }
 
     val g = game
     val c = category
     val sel = offer
+    val seller = sellerOf
     when {
+        seller != null && seller.sellerId != null -> UserProfileScreen(
+            userId = seller.sellerId,
+            own = false,
+            loadProfile = loadProfile,
+            sendReply = { _, _ -> Result.failure(IllegalStateException("Отвечать можно только на отзывы в своём профиле")) },
+            onMessage = { onMessageSeller(seller) },
+            onBack = { sellerOf = null }
+        )
         sel != null -> OfferInfoScreen(
             o = sel,
             loadInfo = loadOfferInfo,
             onMessage = if (sel.sellerId != null) ({ onMessageSeller(sel) }) else null,
+            onProfile = if (sel.sellerId != null) ({ sellerOf = sel }) else null,
             onBack = { offer = null }
         )
         g == null -> LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -192,7 +208,12 @@ fun RealMarketScreen(
                     ) { o ->
                         AppCard(onClick = { offer = o }) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text(o.sellerName.ifEmpty { "Продавец" }, color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                                Avatar(o.sellerName, 32, o.sellerAvatar)
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(o.sellerName.ifEmpty { "Продавец" }, color = Muted, fontSize = 12.sp, maxLines = 1)
+                                    if (o.sellerInfo.isNotEmpty()) Text(o.sellerInfo, color = Orange, fontSize = 11.sp)
+                                }
                                 if (o.stock > 0) Chip("В наличии: ${o.stock}", Green)
                             }
                             Spacer(Modifier.height(6.dp))
@@ -223,6 +244,7 @@ private fun OfferInfoScreen(
     o: MarketOffer,
     loadInfo: suspend (String) -> Result<List<Pair<String, String>>>,
     onMessage: (() -> Unit)?,
+    onProfile: (() -> Unit)?,
     onBack: () -> Unit
 ) {
     val uri = LocalUriHandler.current
@@ -242,7 +264,12 @@ private fun OfferInfoScreen(
             }
             item {
                 AppCard {
-                    InfoRow("Продавец", o.sellerName.ifEmpty { "—" })
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Avatar(o.sellerName, 40, o.sellerAvatar)
+                        Spacer(Modifier.width(10.dp))
+                        Text(o.sellerName.ifEmpty { "Продавец" }, fontWeight = FontWeight.Medium)
+                    }
+                    Spacer(Modifier.height(6.dp))
                     if (o.sellerInfo.isNotEmpty()) InfoRow("О продавце", o.sellerInfo)
                     if (o.stock > 0) InfoRow("В наличии", "${o.stock} шт.")
                     InfoRow("Раздел", o.category)
@@ -250,6 +277,13 @@ private fun OfferInfoScreen(
             }
             if (info.isNotEmpty()) {
                 item { AppCard { info.forEach { (k, v) -> InfoRow(k, v) } } }
+            }
+            if (onProfile != null) {
+                item {
+                    androidx.compose.material3.OutlinedButton(onClick = onProfile, modifier = Modifier.fillMaxWidth()) {
+                        Text("Рейтинг и отзывы продавца")
+                    }
+                }
             }
             if (onMessage != null) {
                 item {

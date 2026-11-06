@@ -16,6 +16,7 @@ import ru.funpaymobile.data.FunPayRepository
 import ru.funpaymobile.data.LocalStore
 import ru.funpaymobile.data.LotForm
 import ru.funpaymobile.data.MarketCategory
+import ru.funpaymobile.data.UserProfile
 import ru.funpaymobile.data.MarketGame
 import ru.funpaymobile.data.MarketOffer
 import ru.funpaymobile.data.Message
@@ -87,8 +88,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun orderInfo(orderId: String): Result<List<Pair<String, String>>> = guarded { it.orderInfo(orderId) }
     suspend fun offerInfo(url: String): Result<List<Pair<String, String>>> = guarded { it.offerInfo(url) }
     suspend fun lotForm(category: MarketCategory): Result<LotForm> = guarded { it.lotForm(category.url, category.title) }
-    suspend fun publishLot(values: List<Pair<String, String>>): Result<String> =
-        guarded { it.publishLot(values) }.also { if (it.isSuccess) refreshSilently() }
+    suspend fun userProfile(id: Long): Result<UserProfile> = guarded { it.userProfile(id) }
+    suspend fun replyReview(orderId: String, text: String): Result<String> = guarded { it.replyReview(orderId, text) }
+    suspend fun publishLot(values: List<Pair<String, String>>, nodeId: String? = null): Result<String> =
+        guarded { it.publishLot(values, nodeId) }.also { if (it.isSuccess) refreshSilently() }
 
     init {
         load()

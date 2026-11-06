@@ -84,7 +84,7 @@ fun ChatsScreen(data: Snapshot, onOpen: (String) -> Unit, onOpenRoom: (String) -
 private fun ChatRow(c: ChatPreview, onClick: () -> Unit) {
     AppCard(onClick = onClick) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Avatar(c.name)
+            Avatar(c.name, url = c.avatarUrl)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(c.name, fontWeight = FontWeight.SemiBold, maxLines = 1)

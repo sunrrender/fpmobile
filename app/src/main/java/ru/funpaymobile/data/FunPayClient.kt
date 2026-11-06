@@ -3,6 +3,9 @@ package ru.funpaymobile.data
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -15,7 +18,7 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
-class FunPayException(message: String, val kind: Kind = Kind.Other) : Exception(message) {
+class FunPayException(message: String, val kind: Kind = Kind.Other, val status: Int? = null) : Exception(message) {
     enum class Kind { InvalidKey, Network, Blocked, Parse, Other }
 }
 
@@ -58,7 +61,12 @@ class FunPayClient(goldenKey: String) {
     var activeSales: Int = 0
         private set
 
+    var ownAvatarUrl: String? = null
+        private set
+
     private var csrf = ""
+    private val extraCookies = linkedMapOf<String, String>()
+    @Volatile private var refreshSession = false
     private var session: String? = null
     private var lastLogin = 0L
 
@@ -69,11 +77,44 @@ class FunPayClient(goldenKey: String) {
         return if (u.scheme == "https" && u.host == HOST) u.toString() else null
     }
 
-    private fun call(url: String, form: FormBody? = null, ajax: Boolean = false, hops: Int = 0): String {
+    private fun urlEncode(v: String): String = java.net.URLEncoder.encode(v, "UTF-8")
+
+    /** Форма в том же виде, как её отправляет браузер (с charset), в отличие от FormBody OkHttp. */
+    private fun formBody(pairs: List<Pair<String, String>>): RequestBody =
+        pairs.joinToString("&") { "${urlEncode(it.first)}=${urlEncode(it.second)}" }
+            .toRequestBody("application/x-www-form-urlencoded; charset=UTF-8".toMediaType())
+
+    private fun storeCookies(headers: List<String>) {
+        for (h in headers) {
+            val nv = h.substringBefore(";")
+            val name = nv.substringBefore("=").trim()
+            val value = nv.substringAfter("=", "").trim()
+            when {
+                name.isEmpty() -> Unit
+                name == "PHPSESSID" -> if (session == null || refreshSession) {
+                    session = value
+                    refreshSession = false
+                }
+                name in SKIP_COOKIES -> Unit
+                value.isEmpty() || value == "deleted" -> extraCookies.remove(name)
+                COOKIE_TOKEN.matches(name) && COOKIE_VALUE.matches(value) -> extraCookies[name] = value
+            }
+        }
+    }
+
+    private fun errorSnippet(body: String): String {
+        if (body.isBlank()) return ""
+        val msg = try { JSONObject(body).optString("msg") } catch (e: Exception) { "" }
+        val text = msg.ifBlank { Jsoup.parse(body).text() }
+        return text.replace(Regex("\\s+"), " ").trim().take(200)
+    }
+
+    private fun call(url: String, form: RequestBody? = null, ajax: Boolean = false, referer: String? = null, hops: Int = 0): String {
         val target = safeUrl(url)
             ?: throw FunPayException("Запрос к стороннему адресу заблокирован для защиты ключа.", FunPayException.Kind.Other)
         val cookie = buildString {
-            append("golden_key=").append(key).append("; locale=ru")
+            append("golden_key=").append(key).append("; cookie_prefs=1; locale=ru")
+            extraCookies.forEach { (k, v) -> append("; ").append(k).append("=").append(v) }
             session?.let { append("; PHPSESSID=").append(it) }
         }
         val rb = Request.Builder()
@@ -81,14 +122,16 @@ class FunPayClient(goldenKey: String) {
             .header("User-Agent", USER_AGENT)
             .header("Accept-Language", "ru")
             .header("Cookie", cookie)
-        if (ajax) rb.header("X-Requested-With", "XMLHttpRequest")
-        if (form != null) rb.post(form)
+        if (ajax) rb.header("Accept", "*/*").header("X-Requested-With", "XMLHttpRequest")
+        if (form != null) {
+            rb.post(form)
+            rb.header("Origin", BASE)
+        }
+        safeUrl(referer)?.let { rb.header("Referer", it) }
 
-        try {
+        return try {
             http.newCall(rb.build()).execute().use { r ->
-                r.headers("Set-Cookie").firstOrNull { it.startsWith("PHPSESSID=") }?.let {
-                    session = it.substringAfter("PHPSESSID=").substringBefore(";")
-                }
+                storeCookies(r.headers("Set-Cookie"))
                 when {
                     r.isRedirect -> {
                         if (hops >= 3) throw FunPayException("Слишком много перенаправлений.", FunPayException.Kind.Other)
@@ -96,16 +139,25 @@ class FunPayClient(goldenKey: String) {
                             ?: throw FunPayException("Некорректный ответ сервера.", FunPayException.Kind.Other)
                         val next = r.request.url.resolve(loc)?.toString()
                             ?: throw FunPayException("Некорректный ответ сервера.", FunPayException.Kind.Other)
-                        return call(next, null, ajax, hops + 1)
+                        if (next.endsWith("account/login")) {
+                            throw FunPayException("Сессия FunPay недействительна: войдите заново.", FunPayException.Kind.InvalidKey, r.code)
+                        }
+                        call(next, null, ajax, referer, hops + 1)
                     }
                     r.code == 403 || r.code == 429 -> throw FunPayException(
                         "FunPay отклонил запрос (код ${r.code}). Возможно, включена защита от ботов или слишком частые запросы. " +
                             "Откройте funpay.com в браузере, пройдите проверку и повторите позже.",
-                        FunPayException.Kind.Blocked
+                        FunPayException.Kind.Blocked, r.code
                     )
-                    r.code in 500..599 -> throw FunPayException("Сервер FunPay временно недоступен (код ${r.code}).", FunPayException.Kind.Network)
-                    !r.isSuccessful -> throw FunPayException("FunPay вернул код ${r.code}.", FunPayException.Kind.Other)
-                    else -> return r.body?.string().orEmpty()
+                    r.code in 500..599 -> throw FunPayException("Сервер FunPay временно недоступен (код ${r.code}).", FunPayException.Kind.Network, r.code)
+                    !r.isSuccessful -> {
+                        val snippet = errorSnippet(r.peekBody(4096).string())
+                        throw FunPayException(
+                            "FunPay вернул код ${r.code}" + if (snippet.isNotEmpty()) ": $snippet" else ".",
+                            FunPayException.Kind.Other, r.code
+                        )
+                    }
+                    else -> r.body?.string().orEmpty()
                 }
             }
         } catch (e: IOException) {
@@ -113,16 +165,18 @@ class FunPayClient(goldenKey: String) {
         }
     }
 
-    private fun runner(objects: JSONArray?, request: JSONObject?): JSONObject {
+    private fun runner(objects: JSONArray, request: JSONObject?, referer: String = "$BASE/chat/"): JSONObject {
         if (System.currentTimeMillis() - lastLogin > SESSION_TTL_MS) loginSync()
-        val form = FormBody.Builder()
-            .add("objects", objects?.toString() ?: "")
-            .add("request", request?.toString() ?: "false")
-            .add("csrf_token", csrf)
-            .build()
-        val body = call("$BASE/runner/", form, ajax = true)
+        val body = formBody(
+            listOf(
+                "objects" to objects.toString(),
+                "request" to (request?.toString() ?: "False"),
+                "csrf_token" to csrf
+            )
+        )
+        val text = call("$BASE/runner/", body, ajax = true, referer = referer)
         return try {
-            JSONObject(body)
+            JSONObject(text)
         } catch (e: Exception) {
             throw FunPayException("FunPay вернул неожиданный ответ (возможно, сессия истекла или нужна проверка в браузере).", FunPayException.Kind.Parse)
         }
@@ -133,7 +187,9 @@ class FunPayClient(goldenKey: String) {
     suspend fun login() = withContext(Dispatchers.IO) { loginSync() }
 
     private fun loginSync() {
-        val doc = Jsoup.parse(call("$BASE/"), "$BASE/")
+        refreshSession = true // PHPSESSID берём из ответа главной страницы, как делает браузер
+        val html = try { call("$BASE/") } finally { refreshSession = false }
+        val doc = Jsoup.parse(html, "$BASE/")
         val name = doc.selectFirst("div.user-link-name")?.text()?.trim()
         if (name.isNullOrEmpty()) {
             throw FunPayException(
@@ -211,7 +267,7 @@ class FunPayClient(goldenKey: String) {
 
     private fun chatsFromRunner(): List<ChatPreview> {
         val objects = JSONArray().put(
-            JSONObject().put("type", "chat_bookmarks").put("id", userId).put("tag", randomTag()).put("data", false)
+            JSONObject().put("type", "chat_bookmarks").put("id", userId).put("tag", "00000000").put("data", false)
         )
         val json = runner(objects, null)
         val arr = json.optJSONArray("objects") ?: throw FunPayException("Пустой ответ при загрузке чатов.", FunPayException.Kind.Parse)
@@ -235,7 +291,8 @@ class FunPayClient(goldenKey: String) {
                 name = a.selectFirst("div.media-user-name")?.text()?.trim().orEmpty().ifEmpty { "Диалог $id" },
                 lastMessage = a.selectFirst("div.contact-item-message")?.text()?.trim().orEmpty(),
                 time = a.selectFirst("div.contact-item-time")?.text()?.trim().orEmpty(),
-                unread = if (a.hasClass("unread")) 1 else 0
+                unread = if (a.hasClass("unread")) 1 else 0,
+                avatarUrl = avatarFrom(a.selectFirst("div.avatar-photo"))
             )
         }.distinctBy { it.id }
 
@@ -269,12 +326,29 @@ class FunPayClient(goldenKey: String) {
 
     suspend fun sendMessage(nodeId: String, text: String) = withContext(Dispatchers.IO) {
         if (text.isBlank()) return@withContext
-        val request = JSONObject().put("action", "chat_message").put(
-            "data",
-            JSONObject().put("node", nodeId.toLongOrNull() ?: nodeId).put("last_message", -1).put("content", text)
+        val node: Any = nodeId.toLongOrNull() ?: nodeId
+        // Как в актуальной библиотеке: вместе с запросом отправляется объект chat_node.
+        val objects = JSONArray().put(
+            JSONObject().put("type", "chat_node").put("id", node).put("tag", "00000000")
+                .put("data", JSONObject().put("node", node).put("last_message", -1).put("content", ""))
         )
-        val resp = runner(null, request)
-        val err = resp.optJSONObject("response")?.opt("error")
+        val request = JSONObject().put("action", "chat_message").put(
+            "data", JSONObject().put("node", node).put("last_message", -1).put("content", text)
+        )
+        val referer = "$BASE/chat/?node=${urlEncode(nodeId)}"
+        val resp = try {
+            runner(objects, request, referer)
+        } catch (e: FunPayException) {
+            if (e.status == 400 || e.status == 428) {
+                loginSync() // обновляем csrf-токен и сессию, пробуем ещё раз
+                runner(objects, request, referer)
+            } else throw e
+        }
+        val r = resp.opt("response")
+        if (r == null || r == JSONObject.NULL || r == false || (r is JSONObject && r.length() == 0)) {
+            throw FunPayException("FunPay не подтвердил отправку сообщения.", FunPayException.Kind.Other)
+        }
+        val err = (r as? JSONObject)?.opt("error")
         if (err != null && err != JSONObject.NULL && err != false) {
             throw FunPayException("FunPay не принял сообщение: $err", FunPayException.Kind.Other)
         }
@@ -284,6 +358,7 @@ class FunPayClient(goldenKey: String) {
 
     suspend fun myLots(): List<Lot> = withContext(Dispatchers.IO) {
         val doc = Jsoup.parse(call("$BASE/users/$userId/"), "$BASE/")
+        ownAvatarUrl = avatarFrom(doc.selectFirst("div.avatar-photo")) ?: ownAvatarUrl
         val result = mutableListOf<Lot>()
         for (container in doc.select("div.offer-list-title-container")) {
             val category = container.selectFirst("div.offer-list-title a")?.text()?.trim().orEmpty()
@@ -344,12 +419,13 @@ class FunPayClient(goldenKey: String) {
                 priceRub = Math.round(parseAmount(priceStr)).toInt(),
                 sellerName = (el.selectFirst("div.tc-seller div.media-user-name") ?: el.selectFirst("div.media-user-name"))
                     ?.text()?.trim().orEmpty(),
-                sellerInfo = el.selectFirst("span.rating-mini-count")?.text()?.trim()?.let { "отзывов: $it" }.orEmpty(),
+                sellerInfo = sellerInfoOf(el),
                 stock = el.selectFirst("div.tc-amount")?.text()?.filter { it.isDigit() }?.toIntOrNull() ?: 0,
                 description = "",
                 priceText = priceStr,
                 url = url,
-                sellerId = userIdFrom((el.selectFirst("div.tc-seller div.media-user-name span") ?: el.selectFirst("div.media-user-name span"))?.attr("data-href"))
+                sellerId = userIdFrom((el.selectFirst("div.tc-seller div.media-user-name span") ?: el.selectFirst("div.media-user-name span"))?.attr("data-href")),
+                sellerAvatar = avatarFrom(el.selectFirst("div.avatar-photo"))
             )
         }
     }
@@ -362,7 +438,8 @@ class FunPayClient(goldenKey: String) {
         if (id.isEmpty()) return@withContext emptyList()
         val doc = Jsoup.parse(call("$BASE/orders/$id/"), "$BASE/")
         requireAuthorized(doc)
-        paramItems(doc)
+        val review = doc.selectFirst(".review-item-text, .review-compiled-review")?.text()?.trim().orEmpty()
+        paramItems(doc) + (if (review.isNotEmpty()) listOf("Отзыв" to review) else emptyList())
     }
 
     suspend fun offerInfo(offerUrl: String): List<Pair<String, String>> = withContext(Dispatchers.IO) {
@@ -416,6 +493,8 @@ class FunPayClient(goldenKey: String) {
             when (el.tagName()) {
                 "textarea" -> out += FormField(name, labelFor(el, name), FieldType.Area, el.text(), required = el.hasAttr("required"))
                 "select" -> {
+                    // Как в актуальной библиотеке: скрытые группы формы не отправляются.
+                    if (el.closest(".form-group")?.hasClass("hidden") == true) continue
                     val opts = el.select("option").map { FormOption(it.attr("value"), it.text().trim()) }
                     val sel = el.selectFirst("option[selected]")?.attr("value") ?: opts.firstOrNull()?.value.orEmpty()
                     out += FormField(name, labelFor(el, name), FieldType.Select, sel, opts, el.hasAttr("required"))
@@ -439,13 +518,21 @@ class FunPayClient(goldenKey: String) {
     }
 
     /** Публикует лот: отправляет заполненную форму на FunPay. Возвращает сообщение об успехе. */
-    suspend fun publishLot(values: List<Pair<String, String>>): String = withContext(Dispatchers.IO) {
+    suspend fun publishLot(values: List<Pair<String, String>>, nodeId: String? = null): String = withContext(Dispatchers.IO) {
         if (System.currentTimeMillis() - lastLogin > SESSION_TTL_MS) loginSync()
-        val fb = FormBody.Builder()
-        values.forEach { (k, v) -> fb.add(k, v) }
-        if (values.none { it.first == "csrf_token" }) fb.add("csrf_token", csrf)
-        if (values.none { it.first == "location" }) fb.add("location", "trade")
-        val body = call("$BASE/lots/offerSave", fb.build(), ajax = true)
+        val fields = values.toMutableList()
+        if (fields.none { it.first == "csrf_token" }) fields += "csrf_token" to csrf
+        if (fields.none { it.first == "location" }) fields += "location" to "trade"
+        val ref = "$BASE/lots/offerEdit?node=${nodeId ?: fields.firstOrNull { it.first == "node_id" }?.second.orEmpty()}"
+        val body = try {
+            call("$BASE/lots/offerSave", formBody(fields), ajax = true, referer = ref)
+        } catch (e: FunPayException) {
+            if (e.status != 400 && e.status != 428) throw e
+            // Обновляем сессию и csrf-токен и пробуем один раз ещё.
+            loginSync()
+            val retry = fields.filter { it.first != "csrf_token" } + ("csrf_token" to csrf)
+            call("$BASE/lots/offerSave", formBody(retry), ajax = true, referer = ref)
+        }
         val resp = try {
             JSONObject(body)
         } catch (e: Exception) {
@@ -459,6 +546,55 @@ class FunPayClient(goldenKey: String) {
             throw FunPayException(msg, FunPayException.Kind.Other)
         }
         "Лот отправлен на FunPay"
+    }
+
+    // ---------------------------------------------------------------- профиль, отзывы
+
+    suspend fun userProfile(id: Long): UserProfile = withContext(Dispatchers.IO) {
+        val doc = Jsoup.parse(call("$BASE/users/$id/"), "$BASE/")
+        requireAuthorized(doc)
+        val name = doc.selectFirst("span.mr4")?.text()?.trim().orEmpty().ifEmpty { "Пользователь $id" }
+        val avatar = avatarFrom(doc.selectFirst("div.avatar-photo"))
+        if (id == userId && avatar != null) ownAvatarUrl = avatar
+        val stars = doc.selectFirst("div.rating-stars")?.select("i.fas")?.size
+        val ratingText = (doc.selectFirst("div.rating-full") ?: doc.selectFirst("div.rating-block"))
+            ?.text()?.let(::cleanText).orEmpty()
+        val online = doc.selectFirst("span.media-user-status")?.text()?.let { it.contains("Онлайн") || it.contains("Online") } ?: false
+        UserProfile(id, name, avatar, online, stars, ratingText, parseReviews(doc), "$BASE/users/$id/")
+    }
+
+    // Разметка отзывов не проверялась на живом сайте: парсер намеренно терпимый к вариантам классов.
+    private fun parseReviews(doc: Document): List<Review> {
+        val items = doc.select("div.review-item").ifEmpty { doc.select("div.review-container") }
+        return items.mapNotNull { el ->
+            val text = el.selectFirst(".review-item-text, .review-text, .review-compiled-review")?.text()?.trim().orEmpty()
+            if (text.isEmpty()) return@mapNotNull null
+            val ratingClass = el.select("[class*=rating]").map { it.className() }
+                .firstNotNullOfOrNull { Regex("rating(\\d)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+            Review(
+                author = el.selectFirst(".review-item-user, .media-user-name")?.text()?.trim().orEmpty(),
+                text = text,
+                rating = ratingClass,
+                reply = el.selectFirst(".review-item-answer, .review-answer, .review-item-reply")?.text()?.trim()?.ifEmpty { null },
+                date = el.selectFirst(".review-item-date, .text-muted")?.text()?.trim().orEmpty(),
+                orderId = el.selectFirst("a[href*=/orders/]")?.attr("href")?.let { Regex("/orders/([A-Za-z0-9]+)").find(it)?.groupValues?.get(1) }
+            )
+        }.take(40)
+    }
+
+    /** Ответ на отзыв по заказу (тот же запрос, что использует сайт: orders/review). */
+    suspend fun replyReview(orderId: String, text: String): String = withContext(Dispatchers.IO) {
+        val id = orderId.removePrefix("#").filter { it.isLetterOrDigit() }
+        if (id.isEmpty() || text.isBlank()) throw FunPayException("Пустой ответ или номер заказа.", FunPayException.Kind.Other)
+        if (System.currentTimeMillis() - lastLogin > SESSION_TTL_MS) loginSync()
+        val body = formBody(
+            listOf(
+                "authorId" to userId.toString(), "text" to text.trim(), "rating" to "5",
+                "csrf_token" to csrf, "orderId" to id
+            )
+        )
+        call("$BASE/orders/review", body, ajax = true, referer = "$BASE/orders/$id/")
+        "Ответ отправлен"
     }
 
     // ---------------------------------------------------------------- вспомогательное
@@ -477,10 +613,32 @@ class FunPayClient(goldenKey: String) {
     private companion object {
         const val HOST = "funpay.com"
         const val BASE = "https://funpay.com"
-        const val USER_AGENT = "FunPayMobile/0.5.1 (Android; unofficial client)"
+        const val USER_AGENT = "FunPayMobile/0.7.0 (Android; unofficial client)"
         const val SESSION_TTL_MS = 20 * 60 * 1000L
         // Печатные ASCII-символы, кроме пробела, кавычки, запятой, точки с запятой и обратной косой черты.
         val KEY_REGEX = Regex("[\\x21\\x23-\\x2B\\x2D-\\x3A\\x3C-\\x5B\\x5D-\\x7E]{8,128}")
+
+        val SKIP_COOKIES = setOf("golden_key", "cookie_prefs", "locale", "fav_games")
+        val COOKIE_TOKEN = Regex("[A-Za-z0-9_\\-.]{1,64}")
+        val COOKIE_VALUE = Regex("[\\x21\\x23-\\x2B\\x2D-\\x3A\\x3C-\\x5B\\x5D-\\x7E]{1,512}")
+
+        fun avatarFrom(el: Element?): String? {
+            val style = el?.attr("style").orEmpty()
+            val raw = Regex("url\\(['\"]?([^)'\"]+)").find(style)?.groupValues?.get(1)?.trim() ?: return null
+            val url = when {
+                raw.startsWith("https://") -> raw
+                raw.startsWith("//") -> "https:$raw"
+                raw.startsWith("/") -> "https://funpay.com$raw"
+                else -> return null
+            }
+            return url
+        }
+
+        fun sellerInfoOf(el: Element): String {
+            val stars = el.selectFirst("div.rating-stars")?.select("i.fas")?.size
+            val reviews = el.selectFirst("div.media-user-reviews")?.text()?.filter { it.isDigit() }?.toIntOrNull()
+            return listOfNotNull(stars?.let { "★ $it" }, reviews?.let { "$it отзывов" }).joinToString(" · ")
+        }
 
         fun userIdFrom(href: String?): Long? = href?.let { Regex("/users/(\\d+)").find(it)?.groupValues?.get(1)?.toLongOrNull() }
 

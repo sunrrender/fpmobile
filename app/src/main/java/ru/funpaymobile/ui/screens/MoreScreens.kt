@@ -44,7 +44,7 @@ import ru.funpaymobile.ui.theme.Muted
 import ru.funpaymobile.ui.theme.Orange
 import ru.funpaymobile.ui.theme.Red
 
-const val APP_VERSION = "0.6.0"
+const val APP_VERSION = "0.7.0"
 
 @Composable
 fun MoreScreen(
@@ -69,14 +69,15 @@ fun MoreScreen(
 }
 
 @Composable
-fun ProfileScreen(data: Snapshot, onBack: () -> Unit, onLogin: () -> Unit, onLogout: () -> Unit) {
+fun ProfileScreen(data: Snapshot, onBack: () -> Unit, onLogin: () -> Unit, onLogout: () -> Unit, onMyReviews: () -> Unit = {}) {
+    val uri = androidx.compose.ui.platform.LocalUriHandler.current
     Column(Modifier.fillMaxSize()) {
         DetailHeader("Профиль", onBack)
         LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
                 AppCard {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Avatar(data.profile.displayName, 56)
+                        Avatar(data.profile.displayName, 56, data.profile.avatarUrl)
                         Spacer(Modifier.width(14.dp))
                         Column {
                             Text(data.profile.displayName, fontWeight = FontWeight.Bold, fontSize = 18.sp)
@@ -90,6 +91,23 @@ fun ProfileScreen(data: Snapshot, onBack: () -> Unit, onLogin: () -> Unit, onLog
                 AppCard {
                     InfoRow("Режим", if (data.isDemo) "Демонстрационный" else "Рабочий")
                     InfoRow("Аккаунт FunPay", data.profile.statusText)
+                }
+            }
+            if (!data.isDemo && data.profile.userId != 0L) {
+                item {
+                    androidx.compose.material3.Button(onClick = onMyReviews, modifier = Modifier.fillMaxWidth()) { Text("Мой рейтинг и отзывы") }
+                }
+                item {
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = { uri.openUri("https://funpay.com/account/settings") },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Изменить профиль и аватар на сайте") }
+                }
+                item {
+                    Text(
+                        "Смена аватара и данных профиля внутри приложения пока не реализована: для неё нет проверенного способа, поэтому она делается на сайте FunPay.",
+                        color = Muted, fontSize = 12.sp
+                    )
                 }
             }
             item {

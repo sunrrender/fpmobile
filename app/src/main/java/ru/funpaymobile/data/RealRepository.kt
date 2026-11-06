@@ -25,7 +25,7 @@ class RealRepository(private val client: FunPayClient) : FunPayRepository {
             market = emptyList(),
             operations = emptyList(),
             events = orders.take(3).map { AppEvent("ev-${it.id}", "Заказ ${it.id}: ${it.status.label}", it.date) },
-            profile = Profile(client.username, true, "Подключён · ID ${client.userId}", client.userId),
+            profile = Profile(client.username, true, "Подключён · ID ${client.userId}", client.userId, client.ownAvatarUrl),
             balanceText = client.balanceText.ifEmpty { null },
             notice = if (warnings.isEmpty()) null else "Не загрузилось: ${warnings.joinToString("; ")}"
         )

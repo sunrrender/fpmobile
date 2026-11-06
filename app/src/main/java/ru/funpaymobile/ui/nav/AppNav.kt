@@ -61,6 +61,7 @@ import ru.funpaymobile.ui.screens.OfferDetailScreen
 import ru.funpaymobile.ui.screens.OrderDetailScreen
 import ru.funpaymobile.ui.screens.OrdersScreen
 import ru.funpaymobile.ui.screens.ProfileScreen
+import ru.funpaymobile.ui.screens.UserProfileScreen
 import ru.funpaymobile.ui.screens.SettingsScreen
 import ru.funpaymobile.ui.theme.Accent
 import ru.funpaymobile.ui.theme.Bg
@@ -196,6 +197,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                                 loadGames = vm::marketGames,
                                 loadOffers = vm::marketOffers,
                                 loadOfferInfo = vm::offerInfo,
+                                loadProfile = vm::userProfile,
                                 onMessageSeller = { o -> openDm(o.sellerId, o.sellerName) }
                             ) else MarketScreen(
                                 data = data,
@@ -298,7 +300,18 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                                 data = data,
                                 onBack = { nav.popBackStack() },
                                 onLogin = { nav.navigate("login") },
-                                onLogout = { vm.disconnect(); nav.popBackStack() }
+                                onLogout = { vm.disconnect(); nav.popBackStack() },
+                                onMyReviews = { nav.navigate("myreviews") }
+                            )
+                        }
+                        composable("myreviews") {
+                            UserProfileScreen(
+                                userId = data.profile.userId,
+                                own = true,
+                                loadProfile = vm::userProfile,
+                                sendReply = vm::replyReview,
+                                onMessage = null,
+                                onBack = { nav.popBackStack() }
                             )
                         }
                         composable("login") {

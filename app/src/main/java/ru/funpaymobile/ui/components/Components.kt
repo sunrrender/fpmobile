@@ -32,12 +32,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import ru.funpaymobile.data.OrderStatus
 import ru.funpaymobile.ui.theme.Accent
 import ru.funpaymobile.ui.theme.Border
@@ -213,12 +216,29 @@ fun NotFoundView(what: String, onBack: () -> Unit) {
     }
 }
 
+/** Картинки грузим только с https-адресов FunPay; ключ и cookies к этим запросам не прикладываются. */
+private fun safeImageUrl(url: String?): String? {
+    val u = url?.toHttpUrlOrNull() ?: return null
+    val host = u.host
+    val ok = u.scheme == "https" && (host == "funpay.com" || host == "sfunpay.com" || host.endsWith(".funpay.com") || host.endsWith(".sfunpay.com"))
+    return if (ok) u.toString() else null
+}
+
 @Composable
-fun Avatar(name: String, size: Int = 44) {
+fun Avatar(name: String, size: Int = 44, url: String? = null) {
+    val image = safeImageUrl(url)
     Box(
         Modifier.size(size.dp).clip(CircleShape).background(Surface2).border(1.dp, Border, CircleShape),
         contentAlignment = Alignment.Center
     ) {
         Text(name.lastOrNull { !it.isWhitespace() }?.uppercase() ?: "?", color = Accent, fontWeight = FontWeight.Bold)
+        if (image != null) {
+            AsyncImage(
+                model = image,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(size.dp).clip(CircleShape)
+            )
+        }
     }
 }

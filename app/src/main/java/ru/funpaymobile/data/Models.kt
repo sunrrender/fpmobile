@@ -36,7 +36,8 @@ data class MarketOffer(
     val description: String,
     val priceText: String? = null,
     val url: String? = null,
-    val sellerId: Long? = null
+    val sellerId: Long? = null,
+    val sellerAvatar: String? = null
 )
 
 data class MarketCategory(val title: String, val url: String)
@@ -48,7 +49,8 @@ data class ChatPreview(
     val name: String,
     val lastMessage: String,
     val time: String,
-    val unread: Int
+    val unread: Int,
+    val avatarUrl: String? = null
 )
 
 data class Message(
@@ -89,7 +91,8 @@ data class Profile(
     val displayName: String,
     val connected: Boolean,
     val statusText: String,
-    val userId: Long = 0
+    val userId: Long = 0,
+    val avatarUrl: String? = null
 )
 
 /** Полный набор данных, который приложение показывает на экранах. */
@@ -146,3 +149,23 @@ data class FormField(
 )
 
 data class LotForm(val categoryTitle: String, val fields: List<FormField>)
+
+data class Review(
+    val author: String,
+    val text: String,
+    val rating: Int?,
+    val reply: String?,
+    val date: String,
+    val orderId: String?
+)
+
+data class UserProfile(
+    val id: Long,
+    val name: String,
+    val avatarUrl: String?,
+    val online: Boolean,
+    val ratingStars: Int?,
+    val ratingText: String,
+    val reviews: List<Review>,
+    val pageUrl: String
+)

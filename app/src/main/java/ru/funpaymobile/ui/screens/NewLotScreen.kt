@@ -157,7 +157,7 @@ fun NewLotScreen(
                         Button(
                             onClick = {
                                 val missing = f.fields.filter {
-                                    it.required && it.type != FieldType.Check && it.type != FieldType.Hidden &&
+                                    (it.required || it.type == FieldType.Select) && it.type != FieldType.Check && it.type != FieldType.Hidden &&
                                         (values[it.name] ?: it.value).isBlank()
                                 }
                                 if (missing.isNotEmpty()) {
@@ -206,7 +206,9 @@ fun NewLotScreen(
                                 { e ->
                                     busy = false
                                     confirm = false
-                                    message = e.message ?: "Не удалось создать лот"
+                                    var m = e.message ?: "Не удалось создать лот"
+                                    f.fields.forEach { fld -> m = m.replace(fld.name, fld.label) }
+                                    message = m.replace("[", "").replace("]", "").replace("\"", "")
                                 }
                             )
                         }

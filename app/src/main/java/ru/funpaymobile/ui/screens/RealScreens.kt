@@ -265,6 +265,7 @@ private fun OfferInfoScreen(
     var buyBusy by remember(o.id) { mutableStateOf(false) }
     var buyResult by remember(o.id) { mutableStateOf<BuyOutcome?>(null) }
     var buyError by remember(o.id) { mutableStateOf<String?>(null) }
+    var confirmBuy by remember(o.id) { mutableStateOf(false) }
     val buyScope = rememberCoroutineScope()
     var buyFields by remember(o.id) { mutableStateOf<List<FormField>?>(null) }
     var buyFieldsError by remember(o.id) { mutableStateOf<String?>(null) }
@@ -275,7 +276,6 @@ private fun OfferInfoScreen(
             loadBuyFields(url).fold({ buyFields = it }, { buyFieldsError = it.message ?: "Не удалось загрузить форму покупки" })
         }
     }
-    var confirmBuy by remember(o.id) { mutableStateOf(false) }
     LaunchedEffect(o.id) {
         o.url?.let { url -> loadInfo(url).onSuccess { info = it } }
     }

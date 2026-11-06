@@ -70,7 +70,7 @@ private fun LotCard(lot: Lot, onClick: () -> Unit) {
         Spacer(Modifier.height(6.dp))
         Text(lot.title, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(6.dp))
-        Text(lot.priceRub.rub(), fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        Text((lot.priceText ?: lot.priceRub.rub()), fontWeight = FontWeight.Bold, fontSize = 18.sp)
     }
 }
 
@@ -87,7 +87,7 @@ fun LotDetailScreen(data: Snapshot, id: String?, onBack: () -> Unit) {
             if (data.isDemo) item { DemoBanner() }
             item {
                 AppCard {
-                    Text(lot.priceRub.rub(), fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                    Text((lot.priceText ?: lot.priceRub.rub()), fontSize = 28.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(6.dp))
                     Text(lot.description, color = Muted, fontSize = 13.sp)
                 }
@@ -96,12 +96,13 @@ fun LotDetailScreen(data: Snapshot, id: String?, onBack: () -> Unit) {
                 AppCard {
                     InfoRow("Категория", lot.category)
                     InfoRow("Статус", if (lot.active) "Активно" else "Скрыто")
-                    InfoRow("Цена", lot.priceRub.rub())
+                    InfoRow("Цена", (lot.priceText ?: lot.priceRub.rub()))
                 }
             }
             item {
                 Text(
-                    "Редактирование и публикация предложений появятся после подключения к FunPay.",
+                    if (data.isDemo) "Редактирование и публикация предложений недоступны в демо-режиме."
+                    else "Редактирование и публикация предложений выполняются на сайте FunPay.",
                     color = Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp)
                 )
             }

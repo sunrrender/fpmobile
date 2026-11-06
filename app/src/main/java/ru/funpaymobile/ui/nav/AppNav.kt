@@ -31,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -48,7 +49,10 @@ import ru.funpaymobile.ui.screens.ChatsScreen
 import ru.funpaymobile.ui.screens.RoomChatScreen
 import ru.funpaymobile.ui.screens.HistoryScreen
 import ru.funpaymobile.ui.screens.HomeScreen
+import ru.funpaymobile.ui.screens.LoginScreen
 import ru.funpaymobile.ui.screens.LotDetailScreen
+import ru.funpaymobile.ui.screens.RealChatScreen
+import ru.funpaymobile.ui.screens.RealMarketScreen
 import ru.funpaymobile.ui.screens.LotsScreen
 import ru.funpaymobile.ui.screens.MarketScreen
 import ru.funpaymobile.ui.screens.MoreScreen
@@ -83,6 +87,20 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
     val nav = rememberNavController()
     val ui by vm.ui.collectAsState()
     val settings by vm.settings.collectAsState()
+    val chatMessages by vm.chatMessages.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    val isReal = (ui as? UiState.Ready)?.data?.isDemo == false
+    androidx.compose.runtime.LaunchedEffect(isReal) {
+        if (isReal) {
+            lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                while (true) {
+                    kotlinx.coroutines.delay(60_000)
+                    vm.refreshSilently()
+                }
+            }
+        }
+    }
     val local by vm.localMessages.collectAsState()
     val localOrders by vm.localOrders.collectAsState()
     val localChats by vm.localChats.collectAsState()
@@ -120,13 +138,33 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
         Box(if (showBar) base else base.navigationBarsPadding()) {
             when (val state = ui) {
                 UiState.Loading -> LoadingView()
-                is UiState.Error -> ErrorView(state.message, onRetry = vm::load)
+                is UiState.Error -> ErrorView(
+                    state.message,
+                    onRetry = vm::load,
+                    onDemo = if (state.hasSavedKey) vm::useDemo else null,
+                    onLogout = if (state.hasSavedKey) vm::disconnect else null
+                )
                 is UiState.Ready -> {
                     val data = remember(state.data, localOrders, localChats) {
-                        state.data.copy(
-                            orders = localOrders + state.data.orders,
-                            chats = localChats + state.data.chats
-                        )
+                        if (state.data.isDemo) {
+                            state.data.copy(
+                                orders = localOrders + state.data.orders,
+                                chats = localChats + state.data.chats
+                            )
+                        } else {
+                            state.data
+                        }
+                    }
+                    val openChatWith: (String) -> Unit = { name ->
+                        if (data.isDemo) {
+                            nav.navigate("chat/${vm.ensureChat(name)}")
+                        } else {
+                            val chat = data.chats.firstOrNull { it.name == name }
+                            if (chat != null) nav.navigate("chat/${chat.id}")
+                            else android.widget.Toast.makeText(
+                                context, "Диалог не найден в списке: откройте заказ на сайте", android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
                     }
                     NavHost(
                         navController = nav,
@@ -149,7 +187,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                             )
                         }
                         composable("market") {
-                            MarketScreen(
+                            if (!data.isDemo) RealMarketScreen(loadGames = vm::marketGames, loadOffers = vm::marketOffers) else MarketScreen(
                                 data = data,
                                 onOpen = { nav.navigate("offer/$it") },
                                 onOpenRoom = { nav.navigate("room/${Uri.encode(it)}") }
@@ -182,7 +220,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                                 data = data,
                                 id = e.arguments?.getString("id"),
                                 onBack = { nav.popBackStack() },
-                                onMessage = { name -> nav.navigate("chat/${vm.ensureChat(name)}") }
+                                onMessage = { name -> openChatWith(name) }
                             )
                         }
                         composable("chats") {
@@ -193,13 +231,24 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                             )
                         }
                         composable("chat/{id}") { e ->
-                            ChatDetailScreen(
-                                data = data,
-                                localMessages = local,
-                                id = e.arguments?.getString("id"),
-                                onSend = vm::addLocalMessage,
-                                onBack = { nav.popBackStack() }
-                            )
+                            if (data.isDemo) {
+                                ChatDetailScreen(
+                                    data = data,
+                                    localMessages = local,
+                                    id = e.arguments?.getString("id"),
+                                    onSend = vm::addLocalMessage,
+                                    onBack = { nav.popBackStack() }
+                                )
+                            } else {
+                                RealChatScreen(
+                                    data = data,
+                                    id = e.arguments?.getString("id"),
+                                    messages = chatMessages,
+                                    refresh = vm::refreshChat,
+                                    send = vm::sendChat,
+                                    onBack = { nav.popBackStack() }
+                                )
+                            }
                         }
                         composable("lots") { LotsScreen(data, onBack = { nav.popBackStack() }) { nav.navigate("lot/$it") } }
                         composable("lot/{id}") { e ->
@@ -209,13 +258,29 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                             MoreScreen(
                                 data = data,
                                 onProfile = { nav.navigate("profile") },
+                                onLogin = { nav.navigate("login") },
                                 onLots = { nav.navigate("lots") },
                                 onHistory = { nav.navigate("history") },
                                 onSettings = { nav.navigate("settings") },
                                 onAbout = { nav.navigate("about") }
                             )
                         }
-                        composable("profile") { ProfileScreen(data) { nav.popBackStack() } }
+                        composable("profile") {
+                            ProfileScreen(
+                                data = data,
+                                onBack = { nav.popBackStack() },
+                                onLogin = { nav.navigate("login") },
+                                onLogout = { vm.disconnect(); nav.popBackStack() }
+                            )
+                        }
+                        composable("login") {
+                            LoginScreen(
+                                secureStorageAvailable = vm.secureStorageAvailable,
+                                onConnect = vm::connect,
+                                onDone = { nav.popBackStack() },
+                                onBack = { nav.popBackStack() }
+                            )
+                        }
                         composable("history") { HistoryScreen(data) { nav.popBackStack() } }
                         composable("settings") {
                             SettingsScreen(
@@ -225,7 +290,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                                 onBack = { nav.popBackStack() }
                             )
                         }
-                        composable("about") { AboutScreen { nav.popBackStack() } }
+                        composable("about") { AboutScreen(isDemo = data.isDemo) { nav.popBackStack() } }
                     }
                 }
             }

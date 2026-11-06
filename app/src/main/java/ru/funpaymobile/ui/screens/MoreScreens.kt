@@ -44,12 +44,13 @@ import ru.funpaymobile.ui.theme.Muted
 import ru.funpaymobile.ui.theme.Orange
 import ru.funpaymobile.ui.theme.Red
 
-const val APP_VERSION = "0.4.0"
+const val APP_VERSION = "0.5.0"
 
 @Composable
 fun MoreScreen(
     data: Snapshot,
     onProfile: () -> Unit,
+    onLogin: () -> Unit,
     onLots: () -> Unit,
     onHistory: () -> Unit,
     onSettings: () -> Unit,
@@ -58,16 +59,17 @@ fun MoreScreen(
     LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { ScreenTitle("Ещё", "Дополнительно") }
         if (data.isDemo) item { DemoBanner() }
+        if (data.isDemo) item { MenuRow("Подключить аккаунт FunPay", Icons.Filled.Person, "Вход по golden_key (неофициально)", onLogin) }
         item { MenuRow("Профиль", Icons.Filled.Person, data.profile.statusText, onProfile) }
-        item { MenuRow("Мои предложения", Icons.Filled.Inventory2, "Демонстрационные товары", onLots) }
-        item { MenuRow("История операций", Icons.Filled.History, "Демонстрационные записи", onHistory) }
+        item { MenuRow("Мои предложения", Icons.Filled.Inventory2, if (data.isDemo) "Демонстрационные товары" else "Ваши лоты на FunPay", onLots) }
+        item { MenuRow("История операций", Icons.Filled.History, if (data.isDemo) "Демонстрационные записи" else "Пока только в демо", onHistory) }
         item { MenuRow("Настройки", Icons.Filled.Settings, null, onSettings) }
         item { MenuRow("О приложении", Icons.Filled.Info, "Версия $APP_VERSION", onAbout) }
     }
 }
 
 @Composable
-fun ProfileScreen(data: Snapshot, onBack: () -> Unit) {
+fun ProfileScreen(data: Snapshot, onBack: () -> Unit, onLogin: () -> Unit, onLogout: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         DetailHeader("Профиль", onBack)
         LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -91,8 +93,15 @@ fun ProfileScreen(data: Snapshot, onBack: () -> Unit) {
                 }
             }
             item {
+                if (data.isDemo) {
+                    androidx.compose.material3.Button(onClick = onLogin, modifier = Modifier.fillMaxWidth()) { Text("Войти по golden_key") }
+                } else {
+                    androidx.compose.material3.OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Выйти и забыть ключ") }
+                }
+            }
+            item {
                 Text(
-                    "Вход в аккаунт пока не реализован. Никогда не отправляйте пароль, cookies или токены в чат и сторонним лицам.",
+                    "Никогда не отправляйте пароль, cookies или golden_key в чат и сторонним лицам.",
                     color = Muted, fontSize = 12.sp
                 )
             }
@@ -168,11 +177,11 @@ private fun SwitchCard(title: String, subtitle: String, checked: Boolean, onChan
 }
 
 @Composable
-fun AboutScreen(onBack: () -> Unit) {
+fun AboutScreen(isDemo: Boolean, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         DetailHeader("О приложении", onBack)
         LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            item { DemoBanner() }
+            if (isDemo) item { DemoBanner() }
             item {
                 AppCard {
                     InfoRow("Приложение", "FunPay Mobile")
@@ -182,8 +191,9 @@ fun AboutScreen(onBack: () -> Unit) {
             }
             item {
                 Text(
-                    "Это неофициальное приложение, не связанное с FunPay. Сейчас оно работает только на вымышленных демонстрационных данных и не обращается к сети. " +
-                        "Архитектура (интерфейс FunPayRepository) подготовлена для безопасной интеграции, если появится официально разрешённый способ доступа.",
+                    (if (isDemo) "Это неофициальное приложение, не связанное с FunPay. Сейчас показаны вымышленные демо-данные; подключить аккаунт можно в разделе «Ещё»."
+                        else "Это неофициальное приложение, не связанное с FunPay. Оно работает через вход по golden_key вашего аккаунта (неофициальный способ: возможны сбои при изменении сайта и риск ограничений от FunPay). Ключ хранится на устройстве в зашифрованном виде и отправляется только на funpay.com.") +
+                        " Не передавайте golden_key никому.",
                     color = Muted, fontSize = 13.sp, lineHeight = 18.sp
                 )
             }

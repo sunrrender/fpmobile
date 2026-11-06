@@ -57,6 +57,7 @@ fun HomeScreen(
     LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { ScreenTitle("Главная", "FunPay Mobile") }
         if (data.isDemo) item { DemoBanner() }
+        data.notice?.let { n -> item { AppCard { Text(n, color = ru.funpaymobile.ui.theme.Orange, fontSize = 12.sp) } } }
 
         item {
             Column(
@@ -66,10 +67,10 @@ fun HomeScreen(
                     .background(Brush.linearGradient(listOf(AccentDeep, Accent.copy(alpha = 0.55f), Surface2)))
                     .padding(20.dp)
             ) {
-                Text("Баланс (демо)", color = Muted.copy(alpha = 0.95f), fontSize = 13.sp)
+                Text(if (data.isDemo) "Баланс (демо)" else "Баланс", color = Muted.copy(alpha = 0.95f), fontSize = 13.sp)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    if (hideBalance) "••••• ₽" else data.balanceRub.rub(),
+                    if (hideBalance) "••••• ₽" else (data.balanceText ?: data.balanceRub.rub()),
                     fontSize = 34.sp, fontWeight = FontWeight.Bold
                 )
             }
@@ -78,11 +79,12 @@ fun HomeScreen(
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 StatCard("Активные заказы", data.activeOrders.toString(), Modifier.weight(1f))
-                StatCard("Продажи за 7 дней", data.salesLast7Total.rub(), Modifier.weight(1f))
+                if (data.isDemo) StatCard("Продажи за 7 дней", data.salesLast7Total.rub(), Modifier.weight(1f))
+                else StatCard("Заказов в списке", data.orders.size.toString(), Modifier.weight(1f))
             }
         }
 
-        item {
+        if (data.salesLast7Days.isNotEmpty()) item {
             AppCard {
                 Text("Продажи по дням", fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(12.dp))
@@ -100,8 +102,8 @@ fun HomeScreen(
             }
         }
 
-        item { SectionLabel("Последние события") }
-        item {
+        if (data.events.isNotEmpty()) item { SectionLabel("Последние события") }
+        if (data.events.isNotEmpty()) item {
             AppCard {
                 data.events.forEachIndexed { i, e ->
                     if (i > 0) Spacer(Modifier.height(12.dp))

@@ -181,7 +181,7 @@ fun LoadingView() {
 }
 
 @Composable
-fun ErrorView(message: String, onRetry: () -> Unit) {
+fun ErrorView(message: String, onRetry: () -> Unit, onDemo: (() -> Unit)? = null, onLogout: (() -> Unit)? = null) {
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         verticalArrangement = Arrangement.Center,
@@ -192,6 +192,14 @@ fun ErrorView(message: String, onRetry: () -> Unit) {
         Text(message, color = Muted, textAlign = TextAlign.Center)
         Spacer(Modifier.height(20.dp))
         Button(onClick = onRetry) { Text("Повторить") }
+        if (onDemo != null) {
+            Spacer(Modifier.height(8.dp))
+            androidx.compose.material3.OutlinedButton(onClick = onDemo) { Text("Открыть демо-режим") }
+        }
+        if (onLogout != null) {
+            Spacer(Modifier.height(8.dp))
+            androidx.compose.material3.TextButton(onClick = onLogout) { Text("Забыть сохранённый ключ") }
+        }
     }
 }
 

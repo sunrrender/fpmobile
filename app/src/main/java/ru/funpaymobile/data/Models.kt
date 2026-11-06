@@ -16,7 +16,9 @@ data class Order(
     val amountRub: Int,
     val status: OrderStatus,
     val description: String,
-    val kind: OrderKind = OrderKind.Sale
+    val kind: OrderKind = OrderKind.Sale,
+    val priceText: String? = null,
+    val webUrl: String? = null
 )
 
 enum class OrderKind { Sale, Purchase }
@@ -30,8 +32,14 @@ data class MarketOffer(
     val sellerName: String,
     val sellerInfo: String,
     val stock: Int,
-    val description: String
+    val description: String,
+    val priceText: String? = null,
+    val url: String? = null
 )
+
+data class MarketCategory(val title: String, val url: String)
+
+data class MarketGame(val name: String, val categories: List<MarketCategory>)
 
 data class ChatPreview(
     val id: String,
@@ -58,7 +66,9 @@ data class Lot(
     val priceRub: Int,
     val category: String,
     val active: Boolean,
-    val description: String
+    val description: String,
+    val priceText: String? = null,
+    val webUrl: String? = null
 )
 
 enum class OperationType { Income, Withdrawal, Fee }
@@ -94,10 +104,13 @@ data class Snapshot(
     val market: List<MarketOffer>,
     val operations: List<Operation>,
     val events: List<AppEvent>,
-    val profile: Profile
+    val profile: Profile,
+    val balanceText: String? = null,
+    /** Предупреждение о частично не загруженных данных (реальный режим). */
+    val notice: String? = null
 ) {
     val activeOrders: Int
-        get() = orders.count { it.status == OrderStatus.Paid || it.status == OrderStatus.InProgress }
+        get() = orders.count { it.kind == OrderKind.Sale && (it.status == OrderStatus.Paid || it.status == OrderStatus.InProgress) }
     val salesLast7Total: Int get() = salesLast7Days.sum()
     val categories: List<String> get() = lots.map { it.category }.distinct()
     val marketCategories: List<String> get() = market.map { it.category }.distinct()

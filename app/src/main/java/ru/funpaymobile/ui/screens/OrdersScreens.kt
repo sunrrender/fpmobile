@@ -53,7 +53,7 @@ fun OrdersScreen(data: Snapshot, onOpen: (String) -> Unit) {
     }
 
     LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { ScreenTitle("Заказы", "Покупки и продажи (демо)") }
+        item { ScreenTitle("Заказы", if (data.isDemo) "Покупки и продажи (демо)" else "Покупки и продажи") }
         if (data.isDemo) item { DemoBanner() }
         item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 4.dp)) {
@@ -87,7 +87,7 @@ private fun OrderCard(o: Order, onClick: () -> Unit) {
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(o.date, color = Muted, fontSize = 12.sp)
-            Text(o.amountRub.rub(), fontWeight = FontWeight.Bold)
+            Text(o.priceText ?: o.amountRub.rub(), fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -100,6 +100,7 @@ fun OrderDetailScreen(data: Snapshot, id: String?, onBack: () -> Unit, onMessage
         return
     }
     val purchase = o.kind == OrderKind.Purchase
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
     Column(Modifier.fillMaxSize()) {
         DetailHeader("Заказ № ${o.id}", onBack)
         LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -119,7 +120,7 @@ fun OrderDetailScreen(data: Snapshot, id: String?, onBack: () -> Unit, onMessage
                     InfoRow("Тип", if (purchase) "Покупка" else "Продажа")
                     InfoRow(if (purchase) "Продавец" else "Заказчик", o.buyer)
                     InfoRow("Дата", o.date)
-                    InfoRow("Сумма", o.amountRub.rub())
+                    InfoRow("Сумма", o.priceText ?: o.amountRub.rub())
                     InfoRow("Статус", o.status.label)
                 }
             }
@@ -128,9 +129,17 @@ fun OrderDetailScreen(data: Snapshot, id: String?, onBack: () -> Unit, onMessage
                     Text(if (purchase) "Написать продавцу" else "Написать заказчику")
                 }
             }
+            o.webUrl?.let { url ->
+                item {
+                    androidx.compose.material3.OutlinedButton(onClick = { uriHandler.openUri(url) }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Открыть заказ на FunPay")
+                    }
+                }
+            }
             item {
                 Text(
-                    "Действия с заказом (выдача, оплата, возврат) недоступны, пока нет подключения к FunPay.",
+                    if (data.isDemo) "Действия с заказом (выдача, оплата, возврат) недоступны в демо-режиме."
+                    else "Выдача товара, подтверждение и возврат выполняются на сайте FunPay.",
                     color = Muted, fontSize = 12.sp
                 )
             }

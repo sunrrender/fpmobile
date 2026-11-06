@@ -56,7 +56,7 @@ fun ChatsScreen(data: Snapshot, onOpen: (String) -> Unit, onOpenRoom: (String) -
     LazyColumn(contentPadding = ScreenPadding, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { ScreenTitle("Чаты", "Диалоги и чаты разделов") }
         if (data.isDemo) item { DemoBanner() }
-        item { SectionLabel("Чаты разделов") }
+        if (data.marketCategories.isNotEmpty()) item { SectionLabel("Чаты разделов") }
         items(data.marketCategories, key = { "room-$it" }) { c ->
             val last = data.rooms[c]?.lastOrNull()
             AppCard(onClick = { onOpenRoom(c) }) {
@@ -145,7 +145,7 @@ fun RoomChatScreen(
 }
 
 @Composable
-private fun ChatThread(
+internal fun ChatThread(
     title: String,
     showDemo: Boolean,
     messages: List<Message>,

@@ -278,7 +278,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                         composable("newlot") {
                             NewLotScreen(
                                 loadGames = vm::marketGames,
-                                loadForm = vm::lotForm,
+                                loadStep = vm::lotStep,
+                                search = vm::lotSearch,
                                 publish = vm::publishLot,
                                 onBack = { nav.popBackStack() },
                                 onPublished = { nav.popBackStack() }

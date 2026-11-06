@@ -173,3 +173,9 @@ data class UserProfile(
     val reviews: List<Review>,
     val pageUrl: String
 )
+
+/** Результат открытия страницы создания лота: либо форма, либо выбор (игра/раздел) с поиском. */
+sealed class LotStep {
+    class Form(val form: LotForm) : LotStep()
+    class Choices(val pageUrl: String, val items: List<MarketCategory>, val searchable: Boolean) : LotStep()
+}

@@ -280,52 +280,125 @@ private fun OfferInfoScreen(
     LaunchedEffect(o.id) {
         o.url?.let { url -> loadInfo(url).onSuccess { info = it } }
     }
+    var cur by remember(o.id) { mutableStateOf("RUB") }
+    var rates by remember(o.id) { mutableStateOf<Map<String, Double>?>(null) }
+    var ratesError by remember(o.id) { mutableStateOf<String?>(null) }
+    var sumInput by remember(o.id) { mutableStateOf("") }
+    val dialogScroll = androidx.compose.foundation.rememberScrollState()
+    LaunchedEffect(confirmBuy) {
+        if (confirmBuy && rates == null) ru.funpaymobile.data.Rates.load().fold({ rates = it }, { ratesError = it.message })
+    }
+    LaunchedEffect(buyResult, buyError) { if (buyResult != null || buyError != null) dialogScroll.animateScrollTo(0) }
+
     if (confirmBuy && o.url != null) {
-        val shown = buyFields.orEmpty().filter { it.type != FieldType.Hidden }
+        fun fmt(v: Double): String = String.format(java.util.Locale.US, "%.2f", v)
+        val allShown = buyFields.orEmpty().filter { it.type != FieldType.Hidden }
+        val amountField = allShown.firstOrNull { it.name == "amount" || it.label.contains("Получу", true) }
+        val payField = allShown.firstOrNull { it.label.contains("Заплачу", true) }
+        val shown = allShown.filter { it != amountField && it != payField }
         val unit = o.priceText?.replace(',', '.')?.let { Regex("[0-9]+(\\.[0-9]+)?").find(it)?.value?.toDoubleOrNull() } ?: o.priceRub.toDouble()
-        val amountField = shown.firstOrNull { it.name == "amount" || it.label.contains("Получу", true) }
-        val payField = shown.firstOrNull { it.label.contains("Заплачу", true) }
+        val rate = rates?.get(cur) ?: 1.0
         val qty = amountField?.let { buyValues[it.name] ?: it.value }?.trim()?.toIntOrNull() ?: 1
-        val total = unit * qty
-        val totalText = String.format(java.util.Locale.US, "%.2f", total)
-        LaunchedEffect(qty, payField?.name) { if (payField != null) buyValues[payField.name] = totalText }
+        val totalRub = unit * qty
+        val sym = mapOf("RUB" to "₽", "USD" to "$", "EUR" to "€")
+
+        // Своё поле «Заплачу» у FunPay хранится в рублях; значение считаем по цене и количеству.
+        LaunchedEffect(qty, payField?.name, unit) { if (payField != null) buyValues[payField.name] = fmt(totalRub) }
+        // Начальная сумма и пересчёт при смене валюты/загрузке курсов и формы.
+        LaunchedEffect(buyFields, cur, rates) { if (unit > 0) sumInput = fmt(totalRub / rate) }
+        // Способ оплаты по умолчанию — первый реальный вариант (виден в поле, можно сменить).
+        LaunchedEffect(buyFields) {
+            buyFields?.forEach { f ->
+                if (f.type == FieldType.Select && (buyValues[f.name] ?: f.value).isBlank()) {
+                    f.options.firstOrNull { it.value.isNotBlank() }?.let { buyValues[f.name] = it.value }
+                }
+            }
+        }
+        fun onQty(t: String) {
+            val name = amountField?.name ?: return
+            buyValues[name] = t.filter { it.isDigit() }.take(6)
+            val q = buyValues[name]?.toIntOrNull() ?: 0
+            sumInput = fmt(unit * q / rate)
+        }
+        fun onSum(t: String) {
+            sumInput = t.filter { it.isDigit() || it == '.' || it == ',' }.take(12)
+            val v = sumInput.replace(',', '.').toDoubleOrNull() ?: 0.0
+            val q = if (unit > 0) Math.floor(v * rate / unit + 1e-9).toInt().coerceIn(0, 999999) else 0
+            amountField?.let { buyValues[it.name] = if (q > 0) q.toString() else "" }
+        }
+
         val needChoice = shown.any { it.type == FieldType.Select && (buyValues[it.name] ?: it.value).isBlank() }
         val qtyOk = qty >= 1 && (o.stock <= 0 || qty <= o.stock)
-        val canBuy = buyFields != null && !needChoice && qtyOk && total <= 100.0
+        val canBuy = buyFields != null && !needChoice && qtyOk && unit > 0 && totalRub <= 100.0
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { if (!buyBusy) confirmBuy = false },
             title = { Text("Подтвердите покупку") },
             text = {
-                Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
-                    InfoRow("Товар", o.title)
-                    InfoRow("Продавец", o.sellerName.ifEmpty { "—" })
-                    InfoRow("Цена за 1 шт.", o.priceText ?: "${o.priceRub} ₽")
-                    Spacer(Modifier.height(8.dp))
-                    shown.forEach { fld ->
-                        Spacer(Modifier.height(6.dp))
-                        FieldEditor(fld, buyValues[fld.name] ?: fld.value) { buyValues[fld.name] = it }
+                Column(Modifier.verticalScroll(dialogScroll)) {
+                    buyError?.let {
+                        Text("Заказ не создан", color = Red, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text(it, color = Red, fontSize = 12.sp)
+                        Spacer(Modifier.height(8.dp))
                     }
-                    if (buyFields == null && buyFieldsError == null) Text("Загружаю способы оплаты…", color = Muted, fontSize = 12.sp)
-                    buyFieldsError?.let { Text(it, color = Red, fontSize = 12.sp) }
-                    Spacer(Modifier.height(8.dp))
-                    Text("Итого ≈ $totalText ₽", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Text(
-                        "Это цена × количество без комиссии способа оплаты: точную сумму посчитает FunPay. Если на балансе не хватает денег, он предложит пополнить недостающую сумму; ссылка откроется только после нажатия кнопки.",
-                        color = Muted, fontSize = 11.sp
-                    )
-                    if (needChoice) Text("Выберите способ оплаты.", color = Orange, fontSize = 12.sp)
-                    if (!qtyOk) Text("Укажите количество от 1" + if (o.stock > 0) " до ${o.stock}." else ".", color = Orange, fontSize = 12.sp)
-                    if (total > 100.0) Text("В приложении пока тестовый лимит покупки 100 ₽.", color = Orange, fontSize = 12.sp)
-                    buyError?.let { Text(it, color = Red, fontSize = 12.sp) }
                     buyResult?.let { r ->
-                        Spacer(Modifier.height(6.dp))
-                        Text(r.message, color = if (r.kind == BuyOutcome.Kind.Order) Green else Orange, fontSize = 13.sp)
+                        Text(
+                            if (r.kind == BuyOutcome.Kind.Order) "Заказ создан" else "FunPay просит оплатить",
+                            color = if (r.kind == BuyOutcome.Kind.Order) Green else Orange, fontWeight = FontWeight.Bold, fontSize = 14.sp
+                        )
+                        Text(r.message, color = Muted, fontSize = 12.sp)
                         r.url?.let { link ->
                             androidx.compose.material3.OutlinedButton(onClick = { uri.openUri(link) }, modifier = Modifier.fillMaxWidth()) {
                                 Text(if (r.kind == BuyOutcome.Kind.Order) "Открыть заказ" else "Перейти к оплате / пополнению")
                             }
                         }
+                        Spacer(Modifier.height(8.dp))
                     }
+                    InfoRow("Товар", o.title)
+                    InfoRow("Продавец", o.sellerName.ifEmpty { "—" })
+                    InfoRow("Цена за 1 шт.", o.priceText ?: "${o.priceRub} ₽")
+                    shown.forEach { fld ->
+                        Spacer(Modifier.height(6.dp))
+                        FieldEditor(fld, buyValues[fld.name] ?: fld.value) { buyValues[fld.name] = it }
+                    }
+                    if (buyFields == null && buyFieldsError == null) Text("Загружаю форму покупки…", color = Muted, fontSize = 12.sp)
+                    buyFieldsError?.let { Text(it, color = Red, fontSize = 12.sp) }
+                    Spacer(Modifier.height(10.dp))
+                    if (amountField != null) {
+                        androidx.compose.material3.OutlinedTextField(
+                            value = buyValues[amountField.name] ?: amountField.value, onValueChange = ::onQty,
+                            label = { Text("Количество" + if (o.stock > 0) " (в наличии ${o.stock})" else "") },
+                            singleLine = true, modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
+                        )
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    androidx.compose.material3.OutlinedTextField(
+                        value = sumInput, onValueChange = ::onSum,
+                        label = { Text("Сумма, ${sym[cur]}") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("RUB", "USD", "EUR").forEach { c ->
+                            androidx.compose.material3.FilterChip(
+                                selected = cur == c, enabled = c == "RUB" || rates != null,
+                                onClick = { cur = c }, label = { Text(c) }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text("К оплате: ${fmt(totalRub)} ₽ ($qty × ${fmt(unit)} ₽)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    if (cur != "RUB" && rates != null) {
+                        Text("≈ ${fmt(totalRub / rate)} ${sym[cur]} по курсу ЦБ: 1 ${sym[cur]} = ${fmt(rate)} ₽", color = Muted, fontSize = 11.sp)
+                    }
+                    ratesError?.let { Text("$it Доступны только рубли.", color = Orange, fontSize = 11.sp) }
+                    Text(
+                        "Сумма в рублях — это цена × количество без комиссии способа оплаты и без курса FunPay: точную сумму к оплате посчитает и покажет сам FunPay. Курс в $/€ справочный. Если на балансе не хватает денег, FunPay предложит пополнить недостающую сумму; ссылка откроется только после нажатия кнопки.",
+                        color = Muted, fontSize = 11.sp
+                    )
+                    if (needChoice) Text("Выберите способ оплаты.", color = Orange, fontSize = 12.sp)
+                    if (!qtyOk) Text("Укажите количество от 1" + if (o.stock > 0) " до ${o.stock}." else ".", color = Orange, fontSize = 12.sp)
+                    if (totalRub > 100.0) Text("В приложении пока тестовый лимит покупки 100 ₽.", color = Orange, fontSize = 12.sp)
                     Spacer(Modifier.height(6.dp))
                     androidx.compose.material3.OutlinedButton(onClick = { uri.openUri(o.url) }, modifier = Modifier.fillMaxWidth()) {
                         Text("Перейти к оплате на FunPay")
@@ -336,13 +409,14 @@ private fun OfferInfoScreen(
                 androidx.compose.material3.Button(
                     enabled = canBuy && !buyBusy && buyResult == null,
                     onClick = {
+                        if (buyBusy) return@Button
                         buyBusy = true; buyError = null
                         buyScope.launch {
                             buy(o.url, buyValues.toMap()).fold({ buyResult = it }, { e -> buyError = e.message ?: "Не удалось оформить покупку" })
                             buyBusy = false
                         }
                     }
-                ) { Text(if (buyBusy) "Оформляю…" else "Оплатить $totalText ₽") }
+                ) { Text(if (buyBusy) "Оформляю…" else "Оплатить ${fmt(totalRub)} ₽") }
             },
             dismissButton = {
                 androidx.compose.material3.TextButton(enabled = !buyBusy, onClick = { confirmBuy = false; buyResult = null; buyError = null }) { Text("Закрыть", color = Accent) }

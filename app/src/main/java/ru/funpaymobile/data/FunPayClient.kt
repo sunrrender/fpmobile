@@ -465,23 +465,81 @@ class FunPayClient(goldenKey: String) {
         return "Не удалось найти форму создания лота в разделе $node. Заголовок: «$title». Текст страницы: «$text». Формы: ${forms.ifEmpty { "нет" }}. Ссылки offerEdit: ${links.ifEmpty { "нет" }}."
     }
 
-    suspend fun lotForm(categoryUrl: String, categoryTitle: String): LotForm = withContext(Dispatchers.IO) {
-        val node = Regex("/lots/(\\d+)/?").find(categoryUrl)?.groupValues?.get(1)
-            ?: throw FunPayException("Для этого раздела (например, игровая валюта) создайте лот на сайте FunPay.", FunPayException.Kind.Other)
-        var body = call("$BASE/lots/offerEdit?node=$node")
+    private fun fetchDoc(url: String): Document {
+        var body = call(url)
         if (body.trimStart().startsWith("{")) {
             body = try { JSONObject(body).optString("html") } catch (e: Exception) { "" }
         }
         val doc = Jsoup.parse(body, "$BASE/")
         requireAuthorizedOrFragment(doc)
-        val form = doc.selectFirst("form.form-offer-editor")
+        return doc
+    }
+
+    private fun findLotForm(doc: Document): Element? =
+        doc.selectFirst("form.form-offer-editor")
             ?: doc.select("form").firstOrNull { it.selectFirst("input[name=offer_id]") != null }
-            ?: throw FunPayException(noFormMessage(doc, node), FunPayException.Kind.Parse)
-        val fields = parseForm(form)
-        if (fields.none { it.type != FieldType.Hidden }) {
-            throw FunPayException("Форма лота пуста или не распознана.", FunPayException.Kind.Parse)
+            ?: doc.select("form").firstOrNull { f -> f.select("[name^=fields]").isNotEmpty() }
+
+    private fun findFilterForm(doc: Document): Element? =
+        doc.select("form").firstOrNull { it.attr("action").contains("Filter", true) || it.selectFirst("input[name=query]") != null }
+
+    private fun choiceLinks(doc: Document, pageUrl: String): List<MarketCategory> =
+        doc.select("a[href]").mapNotNull { a ->
+            val href = a.absUrl("href")
+            val ok = (href.contains("offerEdit") && !href.contains("setlocale") && href != pageUrl) ||
+                Regex("^https://funpay\\.com/lots/\\d+/?$").containsMatchIn(href)
+            val t = a.text().trim()
+            if (ok && t.isNotEmpty()) MarketCategory(t, href) else null
+        }.distinctBy { it.url }.take(60)
+
+    /**
+     * Открывает страницу создания лота. Если на ней форма — возвращает её; если вместо формы выбор игры/раздела
+     * (как в «Промокодах») — возвращает варианты и признак поиска, а форма загружается после выбора.
+     */
+    suspend fun lotStep(categoryUrl: String, categoryTitle: String): LotStep = withContext(Dispatchers.IO) {
+        val pageUrl = if (categoryUrl.contains("offerEdit")) categoryUrl else {
+            val node = Regex("/lots/(\\d+)/?").find(categoryUrl)?.groupValues?.get(1)
+                ?: throw FunPayException("Для этого раздела (например, игровая валюта) создайте лот на сайте FunPay.", FunPayException.Kind.Other)
+            "$BASE/lots/offerEdit?node=$node"
         }
-        LotForm(categoryTitle, fields, dumpForm(form))
+        val doc = fetchDoc(pageUrl)
+        val form = findLotForm(doc)
+        if (form != null) {
+            val fields = parseForm(form)
+            if (fields.none { it.type != FieldType.Hidden }) {
+                throw FunPayException("Форма лота пуста или не распознана.", FunPayException.Kind.Parse)
+            }
+            return@withContext LotStep.Form(LotForm(categoryTitle, fields, dumpForm(form)))
+        }
+        val links = choiceLinks(doc, pageUrl)
+        val filter = findFilterForm(doc)
+        if (links.isNotEmpty() || filter != null) return@withContext LotStep.Choices(pageUrl, links, filter != null)
+        throw FunPayException(noFormMessage(doc, pageUrl), FunPayException.Kind.Parse)
+    }
+
+    /** Поиск на странице выбора (форма фильтра отправляется так же, как её отправляет сайт). */
+    suspend fun lotSearch(pageUrl: String, query: String): List<MarketCategory> = withContext(Dispatchers.IO) {
+        val doc = fetchDoc(pageUrl)
+        val f = findFilterForm(doc) ?: throw FunPayException("Поиск на странице не найден.", FunPayException.Kind.Parse)
+        val action = safeUrl(f.absUrl("action").ifBlank { null })
+            ?: throw FunPayException("Адрес поиска недопустим.", FunPayException.Kind.Other)
+        val params = f.select("input[name]").filter { it.attr("type") !in setOf("submit", "button") }
+            .map { it.attr("name") to (if (it.attr("name") == "query") query else it.attr("value")) }
+            .ifEmpty { listOf("query" to query) }
+        val body = if (f.attr("method").equals("post", true)) {
+            call(action, formBody(params), ajax = true, referer = pageUrl)
+        } else {
+            val qs = params.joinToString("&") { "${urlEncode(it.first)}=${urlEncode(it.second)}" }
+            call(action + (if (action.contains("?")) "&" else "?") + qs, ajax = true, referer = pageUrl)
+        }
+        val html = if (body.trimStart().startsWith("{")) {
+            try { JSONObject(body).optString("html").ifEmpty { body } } catch (e: Exception) { body }
+        } else body
+        val items = choiceLinks(Jsoup.parse(html, "$BASE/"), pageUrl)
+        if (items.isEmpty()) {
+            throw FunPayException("Ничего не найдено. Ответ сайта: «${errorSnippet(body).take(150)}»", FunPayException.Kind.Other)
+        }
+        items
     }
 
     /** Структура формы для диагностики: имена, типы, скрытость, варианты. Значения токенов не включаются. */
@@ -544,12 +602,21 @@ class FunPayClient(goldenKey: String) {
                 if (u.isNotBlank()) classifyBuy(u.let { if (it.startsWith("/")) BASE + it else it }, msg)
                 else throw FunPayException(msg.ifBlank { "FunPay не оформил заказ." }, FunPayException.Kind.Other)
             } else {
+                // 200 с HTML вместо перехода на заказ: заказ не создан, показываем настоящий текст ответа.
                 val d = Jsoup.parse(body)
-                val text = (d.selectFirst("p.lead") ?: d.selectFirst("h1") ?: d.selectFirst("title"))?.text()?.take(200).orEmpty()
-                BuyOutcome(BuyOutcome.Kind.Page, offerUrl, text.ifBlank { "FunPay открыл следующий шаг оформления." })
+                val text = (d.selectFirst("div.alert, .alert-danger, p.lead, .error") ?: d.selectFirst("h1") ?: d.selectFirst("title"))?.text()?.take(250).orEmpty()
+                throw FunPayException("Заказ не создан: FunPay вернул страницу вместо подтверждения. ${if (text.isNotBlank()) "Ответ: «$text»." else ""}", FunPayException.Kind.Other)
             }
         } catch (r: RedirectStop) {
             classifyBuy(r.url, "")
+        }
+        if (outcome.kind == BuyOutcome.Kind.Order && outcome.url != null) {
+            // Подтверждаем создание: страница заказа должна открываться.
+            val confirmed = try { call(outcome.url); true } catch (e: FunPayException) { false }
+            return@withContext BuyOutcome(
+                BuyOutcome.Kind.Order, outcome.url,
+                outcome.message + if (confirmed) " Подтверждено FunPay." else " Страницу заказа открыть не удалось, проверьте раздел «Заказы»."
+            )
         }
         outcome
     }

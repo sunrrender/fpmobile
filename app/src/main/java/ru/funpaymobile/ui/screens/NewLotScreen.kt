@@ -42,6 +42,7 @@ import kotlinx.coroutines.launch
 import ru.funpaymobile.data.FieldType
 import ru.funpaymobile.data.FormField
 import ru.funpaymobile.data.LotForm
+import ru.funpaymobile.data.LotStep
 import ru.funpaymobile.data.MarketCategory
 import ru.funpaymobile.data.MarketGame
 import ru.funpaymobile.ui.components.AppCard
@@ -58,7 +59,8 @@ import ru.funpaymobile.ui.theme.Red
 @Composable
 fun NewLotScreen(
     loadGames: suspend () -> Result<List<MarketGame>>,
-    loadForm: suspend (MarketCategory) -> Result<LotForm>,
+    loadStep: suspend (MarketCategory) -> Result<LotStep>,
+    search: suspend (String, String) -> Result<List<MarketCategory>>,
     publish: suspend (List<Pair<String, String>>) -> Result<String>,
     onBack: () -> Unit,
     onPublished: () -> Unit
@@ -71,6 +73,10 @@ fun NewLotScreen(
     var category by remember { mutableStateOf<MarketCategory?>(null) }
     var form by remember { mutableStateOf<LotForm?>(null) }
     var formError by remember { mutableStateOf<String?>(null) }
+    var choices by remember { mutableStateOf<LotStep.Choices?>(null) }
+    var choiceItems by remember { mutableStateOf<List<MarketCategory>>(emptyList()) }
+    var choiceQuery by remember { mutableStateOf("") }
+    var choiceError by remember { mutableStateOf<String?>(null) }
     val values = remember { mutableStateMapOf<String, String>() }
     var query by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf(false) }
@@ -85,11 +91,22 @@ fun NewLotScreen(
         form = null
         formError = null
         message = null
-        loadForm(c).fold(
-            { f ->
-                values.clear()
-                f.fields.forEach { values[it.name] = it.value }
-                form = f
+        choices = null
+        choiceError = null
+        loadStep(c).fold(
+            { step ->
+                when (step) {
+                    is LotStep.Form -> {
+                        values.clear()
+                        step.form.fields.forEach { values[it.name] = it.value }
+                        form = step.form
+                    }
+                    is LotStep.Choices -> {
+                        choices = step
+                        choiceItems = step.items
+                        choiceQuery = ""
+                    }
+                }
             },
             { formError = it.message ?: "Не удалось загрузить форму" }
         )
@@ -141,6 +158,34 @@ fun NewLotScreen(
                     AppCard(onClick = { category = cat }) { Text(cat.title, fontWeight = FontWeight.Medium) }
                 }
                 formError != null -> item { Text(formError!!, color = Red, fontSize = 13.sp) }
+                choices != null -> {
+                    val ch = choices!!
+                    item {
+                        Text(
+                            "Для этого раздела FunPay сначала просит выбрать игру или сервис. Выберите вариант из списка" +
+                                if (ch.searchable) " или найдите его." else ".",
+                            color = Muted, fontSize = 12.sp
+                        )
+                    }
+                    if (ch.searchable) item {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = choiceQuery, onValueChange = { choiceQuery = it }, modifier = Modifier.weight(1f),
+                                placeholder = { Text("Название игры или сервиса") }, singleLine = true, shape = RoundedCornerShape(16.dp)
+                            )
+                            Button(onClick = {
+                                choiceError = null
+                                scope.launch {
+                                    search(ch.pageUrl, choiceQuery.trim()).fold({ choiceItems = it }, { choiceError = it.message ?: "Ошибка поиска" })
+                                }
+                            }) { Text("Найти") }
+                        }
+                    }
+                    choiceError?.let { e -> item { Text(e, color = Red, fontSize = 13.sp) } }
+                    items(choiceItems, key = { it.url }) { it2 ->
+                        AppCard(onClick = { category = it2 }) { Text(it2.title, fontWeight = FontWeight.Medium) }
+                    }
+                }
                 f == null -> item { Text("Загружаю форму раздела…", color = Muted) }
                 else -> {
                     item {

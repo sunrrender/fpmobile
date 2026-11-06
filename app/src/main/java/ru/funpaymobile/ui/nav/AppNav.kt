@@ -198,6 +198,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                                 loadOffers = vm::marketOffers,
                                 loadOfferInfo = vm::offerInfo,
                                 loadForms = vm::offerForms,
+                                buy = vm::buy,
                                 loadProfile = vm::userProfile,
                                 onMessageSeller = { o -> openDm(o.sellerId, o.sellerName) }
                             ) else MarketScreen(

@@ -109,7 +109,9 @@ class FunPayClient(goldenKey: String) {
         return text.replace(Regex("\\s+"), " ").trim().take(200)
     }
 
-    private fun call(url: String, form: RequestBody? = null, ajax: Boolean = false, referer: String? = null, hops: Int = 0): String {
+    private class RedirectStop(val url: String) : Exception()
+
+    private fun call(url: String, form: RequestBody? = null, ajax: Boolean = false, referer: String? = null, hops: Int = 0, follow: Boolean = true): String {
         val target = safeUrl(url)
             ?: throw FunPayException("Запрос к стороннему адресу заблокирован для защиты ключа.", FunPayException.Kind.Other)
         val cookie = buildString {
@@ -142,6 +144,7 @@ class FunPayClient(goldenKey: String) {
                         if (next.endsWith("account/login")) {
                             throw FunPayException("Сессия FunPay недействительна: войдите заново.", FunPayException.Kind.InvalidKey, r.code)
                         }
+                        if (!follow) throw RedirectStop(next)
                         call(next, null, ajax, referer, hops + 1)
                     }
                     r.code == 403 || r.code == 429 -> throw FunPayException(
@@ -494,6 +497,53 @@ class FunPayClient(goldenKey: String) {
         }
     }
 
+    /**
+     * Оформляет покупку так же, как браузер: отправляет форму со страницы предложения.
+     * Редиректы не выполняются: заказ → открываем в приложении, оплата/пополнение → отдаём ссылку пользователю.
+     */
+    suspend fun buy(offerUrl: String): BuyOutcome = withContext(Dispatchers.IO) {
+        val page = Jsoup.parse(call(offerUrl), "$BASE/")
+        requireAuthorized(page)
+        val form = page.select("form").filter { it.selectFirst("input[name=id], input[name=offer_id]") != null }
+            .let { c -> c.firstOrNull { it.attr("action").contains("order") } ?: c.firstOrNull() }
+            ?: throw FunPayException("Форма покупки на странице не найдена. Нажмите «Перейти к оплате на FunPay».", FunPayException.Kind.Parse)
+        val payload = parseForm(form).mapNotNull { f ->
+            when {
+                f.name.isBlank() -> null
+                f.type == FieldType.Check -> if (f.value == "on") f.name to "on" else null
+                f.name == "amount" && f.value.isBlank() -> f.name to "1"
+                else -> f.name to f.value
+            }
+        }
+        val action = safeUrl(form.absUrl("action").ifBlank { null }) ?: "$BASE/orders/new"
+        val outcome = try {
+            val body = call(action, formBody(payload), ajax = false, referer = offerUrl, follow = false)
+            val j = try { JSONObject(body) } catch (e: Exception) { null }
+            if (j != null) {
+                val u = j.optString("url")
+                val msg = j.optString("msg")
+                if (u.isNotBlank()) classifyBuy(u.let { if (it.startsWith("/")) BASE + it else it }, msg)
+                else throw FunPayException(msg.ifBlank { "FunPay не оформил заказ." }, FunPayException.Kind.Other)
+            } else {
+                val d = Jsoup.parse(body)
+                val text = (d.selectFirst("p.lead") ?: d.selectFirst("h1") ?: d.selectFirst("title"))?.text()?.take(200).orEmpty()
+                BuyOutcome(BuyOutcome.Kind.Page, offerUrl, text.ifBlank { "FunPay открыл следующий шаг оформления." })
+            }
+        } catch (r: RedirectStop) {
+            classifyBuy(r.url, "")
+        }
+        outcome
+    }
+
+    private fun classifyBuy(url: String, msg: String): BuyOutcome {
+        val order = Regex("^https://funpay\\.com/orders/([A-Za-z0-9]+)/?$").find(url)
+        return when {
+            order != null -> BuyOutcome(BuyOutcome.Kind.Order, url, msg.ifBlank { "Заказ #${order.groupValues[1]} создан." })
+            url.startsWith("https://") -> BuyOutcome(BuyOutcome.Kind.Payment, url, msg.ifBlank { "FunPay просит оплатить или пополнить баланс." })
+            else -> throw FunPayException("FunPay вернул неожиданную ссылку.", FunPayException.Kind.Other)
+        }
+    }
+
     /** Формы на странице предложения (для диагностики покупки). */
     suspend fun offerForms(offerUrl: String): String = withContext(Dispatchers.IO) {
         val doc = Jsoup.parse(call(offerUrl), "$BASE/")
@@ -526,8 +576,14 @@ class FunPayClient(goldenKey: String) {
                     val opts = el.select("option").map { FormOption(it.attr("value"), it.text().trim()) }
                     val sel = el.selectFirst("option[selected]")?.attr("value") ?: opts.firstOrNull()?.value.orEmpty()
                     if (el.closest(".form-group")?.hasClass("hidden") == true) {
-                        // Браузер отправляет и скрытые поля: передаём значение по умолчанию, не показывая его.
-                        out += FormField(name, name, FieldType.Hidden, sel)
+                        // Браузер отправляет и скрытые поля. Если значение не задано, а выбор есть, даём выбрать его самому.
+                        val real = opts.filter { it.value.isNotBlank() }
+                        when {
+                            sel.isNotBlank() -> out += FormField(name, name, FieldType.Hidden, sel)
+                            real.size == 1 -> out += FormField(name, name, FieldType.Hidden, real[0].value)
+                            real.size > 1 -> out += FormField(name, labelFor(el, name).let { if (it == name) "Тип (поле формы)" else it }, FieldType.Select, "", opts, true)
+                            else -> out += FormField(name, name, FieldType.Hidden, sel)
+                        }
                         continue
                     }
                     out += FormField(name, labelFor(el, name), FieldType.Select, sel, opts, el.hasAttr("required"))

@@ -36,6 +36,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import ru.funpaymobile.data.BuyOutcome
 import ru.funpaymobile.data.MarketCategory
 import ru.funpaymobile.data.MarketGame
 import ru.funpaymobile.data.MarketOffer
@@ -103,6 +104,7 @@ fun RealMarketScreen(
     loadOffers: suspend (String, String) -> Result<List<MarketOffer>>,
     loadOfferInfo: suspend (String) -> Result<List<Pair<String, String>>>,
     loadForms: suspend (String) -> Result<String>,
+    buy: suspend (String) -> Result<BuyOutcome>,
     loadProfile: suspend (Long) -> Result<UserProfile>,
     onMessageSeller: (MarketOffer) -> Unit
 ) {
@@ -150,6 +152,7 @@ fun RealMarketScreen(
             o = sel,
             loadInfo = loadOfferInfo,
             loadForms = loadForms,
+            buy = buy,
             onMessage = if (sel.sellerId != null) ({ onMessageSeller(sel) }) else null,
             onProfile = if (sel.sellerId != null) ({ sellerOf = sel }) else null,
             onBack = { offer = null }
@@ -246,6 +249,7 @@ private fun OfferInfoScreen(
     o: MarketOffer,
     loadInfo: suspend (String) -> Result<List<Pair<String, String>>>,
     loadForms: suspend (String) -> Result<String>,
+    buy: suspend (String) -> Result<BuyOutcome>,
     onMessage: (() -> Unit)?,
     onProfile: (() -> Unit)?,
     onBack: () -> Unit
@@ -253,6 +257,10 @@ private fun OfferInfoScreen(
     val uri = LocalUriHandler.current
     var info by remember(o.id) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var forms by remember(o.id) { mutableStateOf<String?>(null) }
+    var buyBusy by remember(o.id) { mutableStateOf(false) }
+    var buyResult by remember(o.id) { mutableStateOf<BuyOutcome?>(null) }
+    var buyError by remember(o.id) { mutableStateOf<String?>(null) }
+    val buyScope = rememberCoroutineScope()
     var confirmBuy by remember(o.id) { mutableStateOf(false) }
     LaunchedEffect(o.id) {
         o.url?.let { url -> loadInfo(url).onSuccess { info = it } }
@@ -271,12 +279,39 @@ private fun OfferInfoScreen(
                         "Дальше оплата проходит на FunPay: с вашего баланса, если средств хватает, иначе FunPay сам посчитает недостающую сумму и предложит СБП или другой способ. Ссылка откроется только после нажатия кнопки.",
                         color = Muted, fontSize = 12.sp
                     )
+                    Spacer(Modifier.height(10.dp))
+                    val canBuy = o.priceRub in 1..100
+                    androidx.compose.material3.Button(
+                        enabled = canBuy && !buyBusy && buyResult == null,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            buyBusy = true; buyError = null
+                            buyScope.launch {
+                                buy(o.url).fold({ buyResult = it }, { e -> buyError = e.message ?: "Не удалось оформить покупку" })
+                                buyBusy = false
+                            }
+                        }
+                    ) { Text(if (buyBusy) "Оформляю…" else "Оплатить в приложении") }
+                    if (!canBuy) Text("Покупка в приложении пока ограничена тестовым лимитом 100 ₽.", color = Muted, fontSize = 11.sp)
+                    buyError?.let { Text(it, color = Red, fontSize = 12.sp) }
+                    buyResult?.let { r ->
+                        Spacer(Modifier.height(6.dp))
+                        Text(r.message, color = if (r.kind == BuyOutcome.Kind.Order) Green else Orange, fontSize = 13.sp)
+                        r.url?.let { link ->
+                            androidx.compose.material3.OutlinedButton(onClick = { uri.openUri(link) }, modifier = Modifier.fillMaxWidth()) {
+                                Text(if (r.kind == BuyOutcome.Kind.Order) "Открыть заказ" else "Перейти к оплате / пополнению")
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    androidx.compose.material3.OutlinedButton(onClick = { uri.openUri(o.url) }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Перейти к оплате на FunPay")
+                    }
                 }
             },
             confirmButton = {
-                androidx.compose.material3.TextButton(onClick = { confirmBuy = false; uri.openUri(o.url) }) { Text("Перейти к оплате", color = Accent) }
-            },
-            dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmBuy = false }) { Text("Отмена") } }
+                androidx.compose.material3.TextButton(onClick = { confirmBuy = false; buyResult = null; buyError = null }) { Text("Закрыть", color = Accent) }
+            }
         )
     }
     Column(Modifier.fillMaxSize()) {

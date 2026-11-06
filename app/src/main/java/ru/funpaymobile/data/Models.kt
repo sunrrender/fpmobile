@@ -148,6 +148,10 @@ data class FormField(
     val required: Boolean = false
 )
 
+data class BuyOutcome(val kind: Kind, val url: String?, val message: String) {
+    enum class Kind { Order, Payment, Page }
+}
+
 data class LotForm(val categoryTitle: String, val fields: List<FormField>, val dump: String = "")
 
 data class Review(

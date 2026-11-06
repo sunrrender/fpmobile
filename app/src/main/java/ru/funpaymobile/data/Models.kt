@@ -148,7 +148,7 @@ data class FormField(
     val required: Boolean = false
 )
 
-data class LotForm(val categoryTitle: String, val fields: List<FormField>)
+data class LotForm(val categoryTitle: String, val fields: List<FormField>, val dump: String = "")
 
 data class Review(
     val author: String,

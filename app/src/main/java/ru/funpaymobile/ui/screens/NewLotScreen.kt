@@ -149,6 +149,15 @@ fun NewLotScreen(
                             color = Muted, fontSize = 12.sp
                         )
                     }
+                    if (f.dump.isNotBlank()) item {
+                        var showDump by remember { mutableStateOf(false) }
+                        Column {
+                            TextButton(onClick = { showDump = !showDump }) { Text("Диагностика: структура формы", color = Muted) }
+                            if (showDump) androidx.compose.foundation.text.selection.SelectionContainer {
+                                Text(f.dump, color = Muted, fontSize = 10.sp, lineHeight = 13.sp)
+                            }
+                        }
+                    }
                     items(f.fields.filter { it.type != FieldType.Hidden }) { field ->
                         FieldEditor(field, values[field.name] ?: field.value) { values[field.name] = it }
                     }

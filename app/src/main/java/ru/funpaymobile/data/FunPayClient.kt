@@ -469,7 +469,36 @@ class FunPayClient(goldenKey: String) {
         if (fields.none { it.type != FieldType.Hidden }) {
             throw FunPayException("Форма лота пуста или не распознана.", FunPayException.Kind.Parse)
         }
-        LotForm(categoryTitle, fields)
+        LotForm(categoryTitle, fields, dumpForm(form))
+    }
+
+    /** Структура формы для диагностики: имена, типы, скрытость, варианты. Значения токенов не включаются. */
+    private fun dumpForm(form: Element): String = buildString {
+        append("action=").append(form.attr("action")).append(" method=").append(form.attr("method")).append('\n')
+        for (el in form.select("input, textarea, select, button")) {
+            val name = el.attr("name")
+            val hiddenBy = el.parents().firstOrNull { it.hasClass("hidden") || it.attr("style").replace(" ", "").contains("display:none") }
+            append(el.tagName()).append(' ').append(name.ifEmpty { "(без имени)" })
+            if (el.tagName() == "input") append(" type=").append(el.attr("type").ifEmpty { "text" })
+            if (hiddenBy != null) append(" СКРЫТО(").append(hiddenBy.className().take(30)).append(')')
+            if (el.hasAttr("disabled")) append(" disabled")
+            if (el.tagName() == "select") {
+                append(" опции=[")
+                append(el.select("option").take(8).joinToString("|") { (if (it.hasAttr("selected")) "*" else "") + it.attr("value") + "=" + it.text().take(15) })
+                append(']')
+            } else if (el.tagName() != "button") {
+                val v = if (name.contains("csrf", true) || name.contains("token", true)) "…" else el.attr("value").take(15)
+                append(" value=").append(v)
+            }
+            append('\n')
+        }
+    }
+
+    /** Формы на странице предложения (для диагностики покупки). */
+    suspend fun offerForms(offerUrl: String): String = withContext(Dispatchers.IO) {
+        val doc = Jsoup.parse(call(offerUrl), "$BASE/")
+        val forms = doc.select("form")
+        if (forms.isEmpty()) "На странице нет форм" else forms.joinToString("\n---\n") { dumpForm(it) }
     }
 
     private fun requireAuthorizedOrFragment(doc: Document) {

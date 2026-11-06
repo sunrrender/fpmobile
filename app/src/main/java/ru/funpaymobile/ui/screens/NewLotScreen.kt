@@ -213,6 +213,9 @@ fun NewLotScreen(
                                     }
                                     f.fields.forEach { fld -> m = m.replace(fld.name, fld.label) }
                                     if (sent.isNotEmpty()) m += "\n[диагностика] $sent"
+                                    m += "\n[поля формы] " + payload.filter { it.first != "csrf_token" }
+                                        .joinToString("; ") { "${it.first}=${it.second.take(12).replace("\n", " ")}" }
+                                    m += "\n[в форме нет] " + (if (f.fields.any { it.name == "fields[type]" }) "—" else "поля fields[type]")
                                     message = m.replace("[", "").replace("]", "").replace("\"", "")
                                 }
                             )

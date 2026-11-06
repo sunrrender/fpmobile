@@ -249,8 +249,31 @@ private fun OfferInfoScreen(
 ) {
     val uri = LocalUriHandler.current
     var info by remember(o.id) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var confirmBuy by remember(o.id) { mutableStateOf(false) }
     LaunchedEffect(o.id) {
         o.url?.let { url -> loadInfo(url).onSuccess { info = it } }
+    }
+    if (confirmBuy && o.url != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmBuy = false },
+            title = { Text("Подтвердите покупку") },
+            text = {
+                Column {
+                    InfoRow("Товар", o.title)
+                    InfoRow("Продавец", o.sellerName.ifEmpty { "—" })
+                    InfoRow("Сумма", o.priceText ?: "${o.priceRub} ₽")
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Дальше оплата проходит на FunPay: с вашего баланса, если средств хватает, иначе FunPay сам посчитает недостающую сумму и предложит СБП или другой способ. Ссылка откроется только после нажатия кнопки.",
+                        color = Muted, fontSize = 12.sp
+                    )
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmBuy = false; uri.openUri(o.url) }) { Text("Перейти к оплате", color = Accent) }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmBuy = false }) { Text("Отмена") } }
+        )
     }
     Column(Modifier.fillMaxSize()) {
         DetailHeader("Предложение") { onBack() }
@@ -294,8 +317,8 @@ private fun OfferInfoScreen(
             }
             o.url?.let { url ->
                 item {
-                    androidx.compose.material3.OutlinedButton(onClick = { uri.openUri(url) }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Открыть на FunPay для покупки")
+                    androidx.compose.material3.OutlinedButton(onClick = { confirmBuy = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Купить")
                     }
                 }
             }

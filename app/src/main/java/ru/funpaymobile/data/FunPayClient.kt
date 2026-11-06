@@ -494,9 +494,13 @@ class FunPayClient(goldenKey: String) {
                 "textarea" -> out += FormField(name, labelFor(el, name), FieldType.Area, el.text(), required = el.hasAttr("required"))
                 "select" -> {
                     // Как в актуальной библиотеке: скрытые группы формы не отправляются.
-                    if (el.closest(".form-group")?.hasClass("hidden") == true) continue
                     val opts = el.select("option").map { FormOption(it.attr("value"), it.text().trim()) }
                     val sel = el.selectFirst("option[selected]")?.attr("value") ?: opts.firstOrNull()?.value.orEmpty()
+                    if (el.closest(".form-group")?.hasClass("hidden") == true) {
+                        // Браузер отправляет и скрытые поля: передаём значение по умолчанию, не показывая его.
+                        out += FormField(name, name, FieldType.Hidden, sel)
+                        continue
+                    }
                     out += FormField(name, labelFor(el, name), FieldType.Select, sel, opts, el.hasAttr("required"))
                 }
                 else -> when (el.attr("type").lowercase()) {

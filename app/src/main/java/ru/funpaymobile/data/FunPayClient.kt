@@ -344,7 +344,7 @@ class FunPayClient(goldenKey: String) {
     private companion object {
         const val HOST = "funpay.com"
         const val BASE = "https://funpay.com"
-        const val USER_AGENT = "FunPayMobile/0.5 (Android; неофициальный клиент)"
+        const val USER_AGENT = "FunPayMobile/0.5.1 (Android; unofficial client)"
         const val SESSION_TTL_MS = 20 * 60 * 1000L
         // Печатные ASCII-символы, кроме пробела, кавычки, запятой, точки с запятой и обратной косой черты.
         val KEY_REGEX = Regex("[\\x21\\x23-\\x2B\\x2D-\\x3A\\x3C-\\x5B\\x5D-\\x7E]{8,128}")

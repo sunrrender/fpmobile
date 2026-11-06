@@ -44,7 +44,7 @@ import ru.funpaymobile.ui.theme.Muted
 import ru.funpaymobile.ui.theme.Orange
 import ru.funpaymobile.ui.theme.Red
 
-const val APP_VERSION = "0.5.0"
+const val APP_VERSION = "0.5.1"
 
 @Composable
 fun MoreScreen(

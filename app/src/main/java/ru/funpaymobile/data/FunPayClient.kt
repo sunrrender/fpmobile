@@ -564,7 +564,7 @@ class FunPayClient(goldenKey: String) {
                 append(el.select("option").take(8).joinToString("|") { (if (it.hasAttr("selected")) "*" else "") + it.attr("value") + "=" + it.text().take(15) })
                 append(']')
             } else if (el.tagName() != "button") {
-                val v = if (name.contains("csrf", true) || name.contains("token", true)) "…" else el.attr("value").take(15)
+                val v = if (name.contains("csrf", true) || name.contains("token", true) || name.contains("guard", true)) "…" else el.attr("value").take(15)
                 append(" value=").append(v)
             }
             append('\n')
@@ -617,9 +617,10 @@ class FunPayClient(goldenKey: String) {
 
     /** Второй шаг: подтверждение заказа на странице, которую показал FunPay. */
     suspend fun buyConfirm(step: ConfirmStep): BuyOutcome = withContext(Dispatchers.IO) {
-        val r = submitBuy(step.action, step.fields, step.referer)
+        // Подтверждение отправляем так же, как это делает JS сайта (ajax): обычная отправка возвращает страницу подтверждения.
+        val r = submitBuy(step.action, step.fields, step.referer, ajax = true)
         if (r.kind == BuyOutcome.Kind.Confirm) {
-            throw FunPayException("FunPay снова показал страницу подтверждения: заказ не создан.", FunPayException.Kind.Other)
+            throw FunPayException("FunPay снова показал страницу подтверждения: заказ не создан.\n[диагностика]\n" + r.trace + "\n" + (r.confirm?.dump ?: ""), FunPayException.Kind.Other)
         }
         r
     }
@@ -628,7 +629,7 @@ class FunPayClient(goldenKey: String) {
      * Отправляет форму как браузер, редиректы не выполняет. Успехом считается только переход на страницу заказа;
      * переход на оплату отдаётся ссылкой; страница подтверждения возвращается как шаг; всё остальное — ошибка.
      */
-    private fun submitBuy(action: String, payload: List<Pair<String, String>>, referer: String): BuyOutcome {
+    private fun submitBuy(action: String, payload: List<Pair<String, String>>, referer: String, ajax: Boolean = false): BuyOutcome {
         val t = mutableListOf<String>()
         val plain = setOf("amount", "method", "type", "gate", "offer_id")
         t += "Запрос: POST ${redact(action)}; поля: " +
@@ -636,11 +637,11 @@ class FunPayClient(goldenKey: String) {
         fun trace() = t.joinToString("\n")
         try {
             val outcome: BuyOutcome = try {
-                val body = call(action, formBody(payload), ajax = false, referer = referer, follow = false)
-                t += "Ответ: HTTP $lastStatus, без перенаправления"
+                val body = call(action, formBody(payload), ajax = ajax, referer = referer, follow = false)
+                t += "Ответ: HTTP $lastStatus, без перенаправления" + if (ajax) " (запрос как из JS сайта, X-Requested-With)" else ""
                 val j = try { JSONObject(body) } catch (e: Exception) { null }
                 if (j != null) {
-                    t += "Формат ответа: JSON"
+                    t += "Формат ответа: JSON; ключи: ${j.keys().asSequence().toList()}; msg=«${j.optString("msg").take(120)}»; error=${j.opt("error")}"
                     val u = j.optString("url")
                     val msg = j.optString("msg")
                     if (u.isNotBlank()) classifyBuy(u.let { if (it.startsWith("/")) BASE + it else it }, msg)
@@ -683,6 +684,41 @@ class FunPayClient(goldenKey: String) {
             return outcome.copy(trace = trace())
         } catch (e: FunPayException) {
             throw FunPayException((e.message ?: "Ошибка FunPay") + "\n[диагностика]\n" + trace(), e.kind, e.status)
+        }
+    }
+
+    /**
+     * Предварительный расчёт FunPay по каждому способу оплаты: форма отправляется как при покупке, но берётся только
+     * страница подтверждения («Сумма оплаты»). Заказ при этом не создаётся.
+     */
+    suspend fun buyQuotes(offerUrl: String, chosen: Map<String, String>): List<Quote> = withContext(Dispatchers.IO) {
+        val form = findBuyForm(offerUrl)
+        val fields = parseForm(form)
+        val methodField = fields.firstOrNull { it.name == "method" } ?: fields.firstOrNull { it.type == FieldType.Select }
+            ?: throw FunPayException("В форме покупки нет выбора способа оплаты.", FunPayException.Kind.Parse)
+        val action = resolveAction(offerUrl, form.attr("action")) ?: "$BASE/orders/new"
+        methodField.options.filter { it.value.isNotBlank() }.take(10).map { opt ->
+            val payload = fields.mapNotNull { f ->
+                val v = if (f.name == methodField.name) opt.value else (chosen[f.name] ?: f.value)
+                when {
+                    f.name.isBlank() -> null
+                    f.type == FieldType.Check -> if (v == "on") f.name to "on" else null
+                    f.name == "amount" && v.isBlank() -> f.name to "1"
+                    else -> f.name to v
+                }
+            }
+            try {
+                Thread.sleep(300)
+                val body = call(action, formBody(payload), referer = offerUrl, follow = false)
+                val step = confirmStep(Jsoup.parse(body, "$BASE/"), action)
+                val total = step?.summary?.firstOrNull { it.first.contains("Сумма", true) }?.second
+                    ?.filter { it.isDigit() || it == '.' || it == ',' }?.replace(',', '.')?.toDoubleOrNull()
+                Quote(opt.label, total, if (total == null) "FunPay не показал сумму" else "")
+            } catch (r: RedirectStop) {
+                Quote(opt.label, null, "FunPay перенаправил на ${redact(r.url)}")
+            } catch (e: FunPayException) {
+                Quote(opt.label, null, (e.message ?: "ошибка").take(100))
+            }
         }
     }
 

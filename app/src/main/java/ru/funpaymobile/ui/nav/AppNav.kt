@@ -200,6 +200,9 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                                 loadForms = vm::offerForms,
                                 buy = vm::buy,
                                 confirmOrder = vm::buyConfirm,
+                                loadQuotes = vm::buyQuotes,
+                                balance = data.balanceText?.filter { it.isDigit() || it == '.' || it == ',' }?.replace(',', '.')?.toDoubleOrNull()
+                                    ?: data.balanceRub.toDouble(),
                                 loadBuyFields = vm::buyFields,
                                 loadProfile = vm::userProfile,
                                 onMessageSeller = { o -> openDm(o.sellerId, o.sellerName) }

@@ -192,3 +192,6 @@ sealed class LotStep {
     class Form(val form: LotForm) : LotStep()
     class Choices(val pageUrl: String, val items: List<MarketCategory>, val searchable: Boolean) : LotStep()
 }
+
+/** Сумма оплаты, которую FunPay показывает для конкретного способа оплаты (предварительный расчёт, заказ не создаётся). */
+class Quote(val label: String, val total: Double?, val note: String)

@@ -94,6 +94,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         guarded { it.buy(url, chosen) }.also { if (it.isSuccess) refreshSilently() }
     suspend fun buyConfirm(step: ru.funpaymobile.data.ConfirmStep): Result<ru.funpaymobile.data.BuyOutcome> =
         guarded { it.buyConfirm(step) }.also { if (it.isSuccess) refreshSilently() }
+    suspend fun buyQuotes(url: String, chosen: Map<String, String>): Result<List<ru.funpaymobile.data.Quote>> = guarded { it.buyQuotes(url, chosen) }
     suspend fun offerForms(url: String): Result<String> = guarded { it.offerForms(url) }
     suspend fun userProfile(id: Long): Result<UserProfile> = guarded { it.userProfile(id) }
     suspend fun replyReview(orderId: String, text: String): Result<String> = guarded { it.replyReview(orderId, text) }

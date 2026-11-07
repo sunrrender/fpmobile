@@ -39,6 +39,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import ru.funpaymobile.data.BuyOutcome
 import ru.funpaymobile.data.ConfirmStep
+import ru.funpaymobile.data.Quote
 import ru.funpaymobile.data.FieldType
 import ru.funpaymobile.data.FormField
 import ru.funpaymobile.data.MarketCategory
@@ -110,6 +111,8 @@ fun RealMarketScreen(
     loadForms: suspend (String) -> Result<String>,
     buy: suspend (String, Map<String, String>) -> Result<BuyOutcome>,
     confirmOrder: suspend (ConfirmStep) -> Result<BuyOutcome>,
+    loadQuotes: suspend (String, Map<String, String>) -> Result<List<Quote>>,
+    balance: Double?,
     loadBuyFields: suspend (String) -> Result<List<FormField>>,
     loadProfile: suspend (Long) -> Result<UserProfile>,
     onMessageSeller: (MarketOffer) -> Unit
@@ -160,6 +163,8 @@ fun RealMarketScreen(
             loadForms = loadForms,
             buy = buy,
             confirmOrder = confirmOrder,
+            loadQuotes = loadQuotes,
+            balance = balance,
             loadBuyFields = loadBuyFields,
             onMessage = if (sel.sellerId != null) ({ onMessageSeller(sel) }) else null,
             onProfile = if (sel.sellerId != null) ({ sellerOf = sel }) else null,
@@ -259,6 +264,8 @@ private fun OfferInfoScreen(
     loadForms: suspend (String) -> Result<String>,
     buy: suspend (String, Map<String, String>) -> Result<BuyOutcome>,
     confirmOrder: suspend (ConfirmStep) -> Result<BuyOutcome>,
+    loadQuotes: suspend (String, Map<String, String>) -> Result<List<Quote>>,
+    balance: Double?,
     loadBuyFields: suspend (String) -> Result<List<FormField>>,
     onMessage: (() -> Unit)?,
     onProfile: (() -> Unit)?,
@@ -288,6 +295,9 @@ private fun OfferInfoScreen(
     var rates by remember(o.id) { mutableStateOf<Map<String, Double>?>(null) }
     var ratesError by remember(o.id) { mutableStateOf<String?>(null) }
     var sumInput by remember(o.id) { mutableStateOf("") }
+    var quotes by remember(o.id) { mutableStateOf<List<Quote>?>(null) }
+    var quotesBusy by remember(o.id) { mutableStateOf(false) }
+    var quotesError by remember(o.id) { mutableStateOf<String?>(null) }
     val dialogScroll = androidx.compose.foundation.rememberScrollState()
     LaunchedEffect(confirmBuy) {
         if (confirmBuy && rates == null) ru.funpaymobile.data.Rates.load().fold({ rates = it }, { ratesError = it.message })
@@ -352,6 +362,9 @@ private fun OfferInfoScreen(
                         Text("Проверьте заказ: так его показывает FunPay", color = Orange, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         if (cs.summary.isNotEmpty()) cs.summary.forEach { (k, v) -> InfoRow(k, v) }
                         else Text(cs.text, color = Muted, fontSize = 12.sp)
+                        val exact = cs.summary.firstOrNull { it.first.contains("Сумма", true) }?.second
+                            ?.filter { it.isDigit() || it == '.' || it == ',' }?.replace(',', '.')?.toDoubleOrNull()
+                        BalancePanel(balance, exact, "по расчёту FunPay")
                         Text("Заказ ещё не создан. Он будет создан после нажатия «Подтвердить заказ».", color = Muted, fontSize = 11.sp)
                         buyResult?.trace?.takeIf { it.isNotBlank() }?.let { tr ->
                             androidx.compose.foundation.text.selection.SelectionContainer { Text("[диагностика ответа]\n$tr", color = Muted, fontSize = 9.sp, lineHeight = 12.sp) }
@@ -416,6 +429,34 @@ private fun OfferInfoScreen(
                     }
                     Spacer(Modifier.height(6.dp))
                     Text("К оплате: ${fmt(totalRub)} ₽ ($qty × ${fmt(unit)} ₽)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    val methodLabel = shown.firstOrNull { it.name == "method" }?.let { f ->
+                        f.options.firstOrNull { it.value == (buyValues[f.name] ?: f.value) }?.label
+                    }
+                    val selectedQuote = quotes?.firstOrNull { it.label == methodLabel }?.total
+                    BalancePanel(balance, selectedQuote ?: totalRub, if (selectedQuote != null) "по расчёту FunPay" else "примерно, без комиссии способа оплаты")
+                    androidx.compose.material3.OutlinedButton(
+                        enabled = !quotesBusy && o.url != null,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            quotesBusy = true; quotesError = null
+                            buyScope.launch {
+                                loadQuotes(o.url!!, buyValues.toMap()).fold({ quotes = it }, { quotesError = it.message ?: "Не удалось получить расчёт" })
+                                quotesBusy = false
+                            }
+                        }
+                    ) { Text(if (quotesBusy) "Считаю у FunPay…" else "Узнать точную цену по способам оплаты") }
+                    quotesError?.let { Text(it, color = Red, fontSize = 12.sp) }
+                    quotes?.forEach { q ->
+                        val diff = q.total?.let { t -> if (totalRub > 0) (t / totalRub - 1) * 100 else null }
+                        val tag = when {
+                            q.total == null -> q.note
+                            diff == null -> ""
+                            diff < -0.05 -> " (скидка ${fmt(-diff)}% к цене)"
+                            diff > 0.05 -> " (комиссия +${fmt(diff)}%)"
+                            else -> " (без наценки)"
+                        }
+                        Text("• ${q.label}: ${q.total?.let { fmt(it) + " ₽" } ?: "—"}$tag", color = if (diff != null && diff < -0.05) Green else Muted, fontSize = 12.sp)
+                    }
                     if (cur != "RUB" && rates != null) {
                         Text("≈ ${fmt(totalRub / rate)} ${sym[cur]} по курсу ЦБ: 1 ${sym[cur]} = ${fmt(rate)} ₽", color = Muted, fontSize = 11.sp)
                     }
@@ -523,6 +564,30 @@ private fun OfferInfoScreen(
                         androidx.compose.foundation.text.selection.SelectionContainer { Text(d, color = Muted, fontSize = 10.sp, lineHeight = 13.sp) }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BalancePanel(balance: Double?, total: Double?, source: String) {
+    if (total == null) return
+    val uri = androidx.compose.ui.platform.LocalUriHandler.current
+    fun f(v: Double) = String.format(java.util.Locale.US, "%.2f", v)
+    Spacer(Modifier.height(4.dp))
+    when {
+        balance == null -> Text("Баланс FunPay неизвестен: сумма ${f(total)} ₽ ($source).", color = Muted, fontSize = 12.sp)
+        balance + 1e-9 >= total -> Text(
+            "Баланс ${f(balance)} ₽ покрывает ${f(total)} ₽ ($source). После покупки с баланса останется ${f(balance - total)} ₽.",
+            color = Green, fontSize = 12.sp
+        )
+        else -> {
+            Text(
+                "Не хватает ${f(total - balance)} ₽: баланс ${f(balance)} ₽, к оплате ${f(total)} ₽ ($source).",
+                color = Orange, fontSize = 12.sp
+            )
+            androidx.compose.material3.OutlinedButton(onClick = { uri.openUri("https://funpay.com/account/balance") }, modifier = Modifier.fillMaxWidth()) {
+                Text("Пополнить баланс на FunPay")
             }
         }
     }

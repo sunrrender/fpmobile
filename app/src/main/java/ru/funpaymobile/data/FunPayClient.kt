@@ -84,14 +84,14 @@ class FunPayClient(goldenKey: String) {
         pairs.joinToString("&") { "${urlEncode(it.first)}=${urlEncode(it.second)}" }
             .toRequestBody("application/x-www-form-urlencoded; charset=UTF-8".toMediaType())
 
-    private fun storeCookies(headers: List<String>) {
+    private fun storeCookies(headers: List<String>, pageLoad: Boolean = false) {
         for (h in headers) {
             val nv = h.substringBefore(";")
             val name = nv.substringBefore("=").trim()
             val value = nv.substringAfter("=", "").trim()
             when {
                 name.isEmpty() -> Unit
-                name == "PHPSESSID" -> if (session == null || refreshSession) {
+                name == "PHPSESSID" -> if (value.isNotEmpty() && value != "deleted" && (pageLoad || session == null || refreshSession)) {
                     session = value
                     refreshSession = false
                 }
@@ -133,7 +133,7 @@ class FunPayClient(goldenKey: String) {
 
         return try {
             http.newCall(rb.build()).execute().use { r ->
-                storeCookies(r.headers("Set-Cookie"))
+                storeCookies(r.headers("Set-Cookie"), pageLoad = !ajax)
                 when {
                     r.isRedirect -> {
                         if (hops >= 3) throw FunPayException("Слишком много перенаправлений.", FunPayException.Kind.Other)
@@ -582,6 +582,18 @@ class FunPayClient(goldenKey: String) {
     }
 
     suspend fun buy(offerUrl: String, chosen: Map<String, String>): BuyOutcome = withContext(Dispatchers.IO) {
+        try {
+            buyOnce(offerUrl, chosen)
+        } catch (e: FunPayException) {
+            // «Обновите страницу и повторите попытку» (400/428): берём свежую сессию и форму и пробуем один раз ещё.
+            if (e.status == 400 || e.status == 428) {
+                loginSync()
+                buyOnce(offerUrl, chosen)
+            } else throw e
+        }
+    }
+
+    private fun buyOnce(offerUrl: String, chosen: Map<String, String>): BuyOutcome {
         val form = findBuyForm(offerUrl)
         val payload = parseForm(form).mapNotNull { f ->
             val v = chosen[f.name] ?: f.value
@@ -593,8 +605,25 @@ class FunPayClient(goldenKey: String) {
             }
         }
         val action = safeUrl(form.absUrl("action").ifBlank { null }) ?: "$BASE/orders/new"
+        return submitBuy(action, payload, offerUrl)
+    }
+
+    /** Второй шаг: подтверждение заказа на странице, которую показал FunPay. */
+    suspend fun buyConfirm(step: ConfirmStep): BuyOutcome = withContext(Dispatchers.IO) {
+        val r = submitBuy(step.action, step.fields, step.referer)
+        if (r.kind == BuyOutcome.Kind.Confirm) {
+            throw FunPayException("FunPay снова показал страницу подтверждения: заказ не создан.", FunPayException.Kind.Other)
+        }
+        r
+    }
+
+    /**
+     * Отправляет форму как браузер, редиректы не выполняет. Успехом считается только переход на страницу заказа;
+     * переход на оплату отдаётся ссылкой; страница подтверждения возвращается как шаг; всё остальное — ошибка.
+     */
+    private fun submitBuy(action: String, payload: List<Pair<String, String>>, referer: String): BuyOutcome {
         val outcome = try {
-            val body = call(action, formBody(payload), ajax = false, referer = offerUrl, follow = false)
+            val body = call(action, formBody(payload), ajax = false, referer = referer, follow = false)
             val j = try { JSONObject(body) } catch (e: Exception) { null }
             if (j != null) {
                 val u = j.optString("url")
@@ -602,23 +631,48 @@ class FunPayClient(goldenKey: String) {
                 if (u.isNotBlank()) classifyBuy(u.let { if (it.startsWith("/")) BASE + it else it }, msg)
                 else throw FunPayException(msg.ifBlank { "FunPay не оформил заказ." }, FunPayException.Kind.Other)
             } else {
-                // 200 с HTML вместо перехода на заказ: заказ не создан, показываем настоящий текст ответа.
-                val d = Jsoup.parse(body)
-                val text = (d.selectFirst("div.alert, .alert-danger, p.lead, .error") ?: d.selectFirst("h1") ?: d.selectFirst("title"))?.text()?.take(250).orEmpty()
-                throw FunPayException("Заказ не создан: FunPay вернул страницу вместо подтверждения. ${if (text.isNotBlank()) "Ответ: «$text»." else ""}", FunPayException.Kind.Other)
+                val d = Jsoup.parse(body, "$BASE/")
+                confirmStep(d, action)?.let { BuyOutcome(BuyOutcome.Kind.Confirm, null, "FunPay показал страницу подтверждения заказа.", it) }
+                    ?: run {
+                        val text = (d.selectFirst("div.alert, .alert-danger, p.lead, .error") ?: d.selectFirst("h1") ?: d.selectFirst("title"))?.text()?.take(250).orEmpty()
+                        throw FunPayException("Заказ не создан: FunPay вернул страницу вместо подтверждения. ${if (text.isNotBlank()) "Ответ: «$text»." else ""}", FunPayException.Kind.Other)
+                    }
             }
         } catch (r: RedirectStop) {
             classifyBuy(r.url, "")
         }
         if (outcome.kind == BuyOutcome.Kind.Order && outcome.url != null) {
-            // Подтверждаем создание: страница заказа должна открываться.
             val confirmed = try { call(outcome.url); true } catch (e: FunPayException) { false }
-            return@withContext BuyOutcome(
+            return BuyOutcome(
                 BuyOutcome.Kind.Order, outcome.url,
                 outcome.message + if (confirmed) " Подтверждено FunPay." else " Страницу заказа открыть не удалось, проверьте раздел «Заказы»."
             )
         }
-        outcome
+        return outcome
+    }
+
+    private fun confirmStep(doc: Document, referer: String): ConfirmStep? {
+        val form = doc.select("form")
+            .filter { it.selectFirst("input[name=query]") == null && !it.attr("action").contains("setlocale") && it.select("input[name],select[name]").isNotEmpty() }
+            .let { c -> c.firstOrNull { it.attr("action").contains("order") } ?: c.firstOrNull() } ?: return null
+        val action = safeUrl(form.absUrl("action").ifBlank { null }) ?: return null
+        val fields = parseForm(form).mapNotNull { f ->
+            when {
+                f.name.isBlank() -> null
+                f.type == FieldType.Check -> if (f.value == "on") f.name to "on" else null
+                else -> f.name to f.value
+            }
+        }.toMutableList()
+        form.selectFirst("button[name], input[type=submit][name]")?.let { b ->
+            if (fields.none { it.first == b.attr("name") }) fields += b.attr("name") to b.attr("value")
+        }
+        val rows = paramItems(doc) + doc.select("table tr").mapNotNull { tr ->
+            val k = tr.selectFirst("th")?.text()?.trim().orEmpty()
+            val v = tr.selectFirst("td")?.text()?.trim().orEmpty()
+            if (k.isEmpty() || v.isEmpty()) null else k to v
+        }
+        val scope = form.parents().firstOrNull { it.hasClass("content") || it.hasClass("content-with-cd") } ?: form.parent() ?: doc.body()
+        return ConfirmStep(action, fields, referer, rows.take(12), scope.text().take(500), dumpForm(form))
     }
 
     private fun classifyBuy(url: String, msg: String): BuyOutcome {

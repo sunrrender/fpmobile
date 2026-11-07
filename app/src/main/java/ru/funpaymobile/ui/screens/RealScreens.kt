@@ -38,6 +38,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import ru.funpaymobile.data.BuyOutcome
+import ru.funpaymobile.data.ConfirmStep
 import ru.funpaymobile.data.FieldType
 import ru.funpaymobile.data.FormField
 import ru.funpaymobile.data.MarketCategory
@@ -108,6 +109,7 @@ fun RealMarketScreen(
     loadOfferInfo: suspend (String) -> Result<List<Pair<String, String>>>,
     loadForms: suspend (String) -> Result<String>,
     buy: suspend (String, Map<String, String>) -> Result<BuyOutcome>,
+    confirmOrder: suspend (ConfirmStep) -> Result<BuyOutcome>,
     loadBuyFields: suspend (String) -> Result<List<FormField>>,
     loadProfile: suspend (Long) -> Result<UserProfile>,
     onMessageSeller: (MarketOffer) -> Unit
@@ -157,6 +159,7 @@ fun RealMarketScreen(
             loadInfo = loadOfferInfo,
             loadForms = loadForms,
             buy = buy,
+            confirmOrder = confirmOrder,
             loadBuyFields = loadBuyFields,
             onMessage = if (sel.sellerId != null) ({ onMessageSeller(sel) }) else null,
             onProfile = if (sel.sellerId != null) ({ sellerOf = sel }) else null,
@@ -255,6 +258,7 @@ private fun OfferInfoScreen(
     loadInfo: suspend (String) -> Result<List<Pair<String, String>>>,
     loadForms: suspend (String) -> Result<String>,
     buy: suspend (String, Map<String, String>) -> Result<BuyOutcome>,
+    confirmOrder: suspend (ConfirmStep) -> Result<BuyOutcome>,
     loadBuyFields: suspend (String) -> Result<List<FormField>>,
     onMessage: (() -> Unit)?,
     onProfile: (() -> Unit)?,
@@ -340,7 +344,17 @@ private fun OfferInfoScreen(
                         Text(it, color = Red, fontSize = 12.sp)
                         Spacer(Modifier.height(8.dp))
                     }
-                    buyResult?.let { r ->
+                    buyResult?.confirm?.let { cs ->
+                        Text("Проверьте заказ: так его показывает FunPay", color = Orange, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        if (cs.summary.isNotEmpty()) cs.summary.forEach { (k, v) -> InfoRow(k, v) }
+                        else Text(cs.text, color = Muted, fontSize = 12.sp)
+                        Text("Заказ ещё не создан. Он будет создан после нажатия «Подтвердить заказ».", color = Muted, fontSize = 11.sp)
+                        androidx.compose.foundation.text.selection.SelectionContainer {
+                            Text("[диагностика формы подтверждения]\n" + cs.dump, color = Muted, fontSize = 9.sp, lineHeight = 12.sp)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    buyResult?.takeIf { it.confirm == null }?.let { r ->
                         Text(
                             if (r.kind == BuyOutcome.Kind.Order) "Заказ создан" else "FunPay просит оплатить",
                             color = if (r.kind == BuyOutcome.Kind.Order) Green else Orange, fontWeight = FontWeight.Bold, fontSize = 14.sp
@@ -406,7 +420,19 @@ private fun OfferInfoScreen(
                 }
             },
             confirmButton = {
-                androidx.compose.material3.Button(
+                val step = buyResult?.confirm
+                if (step != null) androidx.compose.material3.Button(
+                    enabled = !buyBusy,
+                    onClick = {
+                        if (buyBusy) return@Button
+                        buyBusy = true; buyError = null
+                        buyScope.launch {
+                            confirmOrder(step).fold({ buyResult = it }, { e -> buyError = e.message ?: "Не удалось подтвердить заказ" })
+                            buyBusy = false
+                        }
+                    }
+                ) { Text(if (buyBusy) "Оформляю…" else "Подтвердить заказ") }
+                else androidx.compose.material3.Button(
                     enabled = canBuy && !buyBusy && buyResult == null,
                     onClick = {
                         if (buyBusy) return@Button

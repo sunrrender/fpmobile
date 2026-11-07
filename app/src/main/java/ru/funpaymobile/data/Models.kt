@@ -148,8 +148,18 @@ data class FormField(
     val required: Boolean = false
 )
 
-data class BuyOutcome(val kind: Kind, val url: String?, val message: String) {
-    enum class Kind { Order, Payment, Page }
+/** Шаг подтверждения заказа на стороне FunPay: адрес, поля формы и то, что FunPay показывает пользователю. */
+class ConfirmStep(
+    val action: String,
+    val fields: List<Pair<String, String>>,
+    val referer: String,
+    val summary: List<Pair<String, String>>,
+    val text: String,
+    val dump: String
+)
+
+data class BuyOutcome(val kind: Kind, val url: String?, val message: String, val confirm: ConfirmStep? = null) {
+    enum class Kind { Order, Payment, Page, Confirm }
 }
 
 data class LotForm(val categoryTitle: String, val fields: List<FormField>, val dump: String = "")

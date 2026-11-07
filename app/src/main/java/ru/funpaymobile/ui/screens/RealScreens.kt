@@ -300,6 +300,7 @@ private fun OfferInfoScreen(
         val amountField = allShown.firstOrNull { it.name == "amount" || it.label.contains("Получу", true) }
         val payField = allShown.firstOrNull { it.label.contains("Заплачу", true) }
         val shown = allShown.filter { it != amountField && it != payField }
+            .map { if (it.name == "method") it.copy(label = "Способ оплаты") else it }
         val unit = o.priceText?.replace(',', '.')?.let { Regex("[0-9]+(\\.[0-9]+)?").find(it)?.value?.toDoubleOrNull() } ?: o.priceRub.toDouble()
         val rate = rates?.get(cur) ?: 1.0
         val qty = amountField?.let { buyValues[it.name] ?: it.value }?.trim()?.toIntOrNull() ?: 1
@@ -314,7 +315,10 @@ private fun OfferInfoScreen(
         LaunchedEffect(buyFields) {
             buyFields?.forEach { f ->
                 if (f.type == FieldType.Select && (buyValues[f.name] ?: f.value).isBlank()) {
-                    f.options.firstOrNull { it.value.isNotBlank() }?.let { buyValues[f.name] = it.value }
+                    // Если среди способов есть оплата с баланса FunPay, выбираем её, иначе первый вариант.
+                    val real = f.options.filter { it.value.isNotBlank() }
+                    (real.firstOrNull { it.label.contains("баланс", true) || it.label.contains("balance", true) } ?: real.firstOrNull())
+                        ?.let { buyValues[f.name] = it.value }
                 }
             }
         }

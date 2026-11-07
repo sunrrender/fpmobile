@@ -604,7 +604,7 @@ class FunPayClient(goldenKey: String) {
                 else -> f.name to v
             }
         }
-        val action = safeUrl(form.absUrl("action").ifBlank { null }) ?: "$BASE/orders/new"
+        val action = resolveAction(offerUrl, form.attr("action")) ?: "$BASE/orders/new"
         return submitBuy(action, payload, offerUrl)
     }
 
@@ -651,11 +651,15 @@ class FunPayClient(goldenKey: String) {
         return outcome
     }
 
-    private fun confirmStep(doc: Document, referer: String): ConfirmStep? {
+    /** Адрес из атрибута action: пустой action означает «тот же адрес, что у страницы», как в браузере. */
+    private fun resolveAction(pageUrl: String, raw: String): String? =
+        pageUrl.toHttpUrlOrNull()?.resolve(raw.trim())?.toString()?.let { safeUrl(it) }
+
+    private fun confirmStep(doc: Document, pageUrl: String): ConfirmStep? {
         val form = doc.select("form")
             .filter { it.selectFirst("input[name=query]") == null && !it.attr("action").contains("setlocale") && it.select("input[name],select[name]").isNotEmpty() }
             .let { c -> c.firstOrNull { it.attr("action").contains("order") } ?: c.firstOrNull() } ?: return null
-        val action = safeUrl(form.absUrl("action").ifBlank { null }) ?: return null
+        val action = resolveAction(pageUrl, form.attr("action")) ?: return null
         val fields = parseForm(form).mapNotNull { f ->
             when {
                 f.name.isBlank() -> null
@@ -672,7 +676,7 @@ class FunPayClient(goldenKey: String) {
             if (k.isEmpty() || v.isEmpty()) null else k to v
         }
         val scope = form.parents().firstOrNull { it.hasClass("content") || it.hasClass("content-with-cd") } ?: form.parent() ?: doc.body()
-        return ConfirmStep(action, fields, referer, rows.take(12), scope.text().take(500), dumpForm(form))
+        return ConfirmStep(action, fields, pageUrl, rows.take(12), scope.text().take(500), dumpForm(form))
     }
 
     private fun classifyBuy(url: String, msg: String): BuyOutcome {

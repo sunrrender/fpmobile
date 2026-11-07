@@ -158,8 +158,11 @@ class ConfirmStep(
     val dump: String
 )
 
-data class BuyOutcome(val kind: Kind, val url: String?, val message: String, val confirm: ConfirmStep? = null) {
-    enum class Kind { Order, Payment, Page, Confirm }
+data class BuyOutcome(
+    val kind: Kind, val url: String?, val message: String,
+    val confirm: ConfirmStep? = null, val trace: String = ""
+) {
+    enum class Kind { Order, Payment, Page, Confirm, Unverified }
 }
 
 data class LotForm(val categoryTitle: String, val fields: List<FormField>, val dump: String = "")

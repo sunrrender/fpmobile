@@ -345,7 +345,7 @@ private fun OfferInfoScreen(
                 Column(Modifier.verticalScroll(dialogScroll)) {
                     buyError?.let {
                         Text("Заказ не создан", color = Red, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        Text(it, color = Red, fontSize = 12.sp)
+                        androidx.compose.foundation.text.selection.SelectionContainer { Text(it, color = Red, fontSize = 12.sp) }
                         Spacer(Modifier.height(8.dp))
                     }
                     buyResult?.confirm?.let { cs ->
@@ -353,6 +353,9 @@ private fun OfferInfoScreen(
                         if (cs.summary.isNotEmpty()) cs.summary.forEach { (k, v) -> InfoRow(k, v) }
                         else Text(cs.text, color = Muted, fontSize = 12.sp)
                         Text("Заказ ещё не создан. Он будет создан после нажатия «Подтвердить заказ».", color = Muted, fontSize = 11.sp)
+                        buyResult?.trace?.takeIf { it.isNotBlank() }?.let { tr ->
+                            androidx.compose.foundation.text.selection.SelectionContainer { Text("[диагностика ответа]\n$tr", color = Muted, fontSize = 9.sp, lineHeight = 12.sp) }
+                        }
                         androidx.compose.foundation.text.selection.SelectionContainer {
                             Text("[диагностика формы подтверждения]\n" + cs.dump, color = Muted, fontSize = 9.sp, lineHeight = 12.sp)
                         }
@@ -360,13 +363,20 @@ private fun OfferInfoScreen(
                     }
                     buyResult?.takeIf { it.confirm == null }?.let { r ->
                         Text(
-                            if (r.kind == BuyOutcome.Kind.Order) "Заказ создан" else "FunPay просит оплатить",
+                            when (r.kind) {
+                                BuyOutcome.Kind.Order -> "Заказ создан"
+                                BuyOutcome.Kind.Unverified -> "Заказ, возможно, создан: проверьте"
+                                else -> "FunPay просит оплатить"
+                            },
                             color = if (r.kind == BuyOutcome.Kind.Order) Green else Orange, fontWeight = FontWeight.Bold, fontSize = 14.sp
                         )
                         Text(r.message, color = Muted, fontSize = 12.sp)
+                        if (r.trace.isNotBlank()) androidx.compose.foundation.text.selection.SelectionContainer {
+                            Text("[диагностика ответа]\n" + r.trace, color = Muted, fontSize = 9.sp, lineHeight = 12.sp)
+                        }
                         r.url?.let { link ->
                             androidx.compose.material3.OutlinedButton(onClick = { uri.openUri(link) }, modifier = Modifier.fillMaxWidth()) {
-                                Text(if (r.kind == BuyOutcome.Kind.Order) "Открыть заказ" else "Перейти к оплате / пополнению")
+                                Text(if (r.kind == BuyOutcome.Kind.Order || r.kind == BuyOutcome.Kind.Unverified) "Открыть заказ на FunPay" else "Перейти к оплате / пополнению")
                             }
                         }
                         Spacer(Modifier.height(8.dp))

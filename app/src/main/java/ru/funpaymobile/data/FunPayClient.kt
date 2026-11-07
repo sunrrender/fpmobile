@@ -111,6 +111,12 @@ class FunPayClient(goldenKey: String) {
 
     private class RedirectStop(val url: String) : Exception()
 
+    @Volatile private var lastStatus = 0
+
+    /** Адрес для диагностики: без параметров запроса (в них могут быть токены). */
+    private fun redact(url: String): String =
+        url.toHttpUrlOrNull()?.let { "${it.scheme}://${it.host}${it.encodedPath}" } ?: "(некорректный адрес)"
+
     private fun call(url: String, form: RequestBody? = null, ajax: Boolean = false, referer: String? = null, hops: Int = 0, follow: Boolean = true): String {
         val target = safeUrl(url)
             ?: throw FunPayException("Запрос к стороннему адресу заблокирован для защиты ключа.", FunPayException.Kind.Other)
@@ -133,6 +139,7 @@ class FunPayClient(goldenKey: String) {
 
         return try {
             http.newCall(rb.build()).execute().use { r ->
+                lastStatus = r.code
                 storeCookies(r.headers("Set-Cookie"), pageLoad = !ajax)
                 when {
                     r.isRedirect -> {
@@ -622,33 +629,61 @@ class FunPayClient(goldenKey: String) {
      * переход на оплату отдаётся ссылкой; страница подтверждения возвращается как шаг; всё остальное — ошибка.
      */
     private fun submitBuy(action: String, payload: List<Pair<String, String>>, referer: String): BuyOutcome {
-        val outcome = try {
-            val body = call(action, formBody(payload), ajax = false, referer = referer, follow = false)
-            val j = try { JSONObject(body) } catch (e: Exception) { null }
-            if (j != null) {
-                val u = j.optString("url")
-                val msg = j.optString("msg")
-                if (u.isNotBlank()) classifyBuy(u.let { if (it.startsWith("/")) BASE + it else it }, msg)
-                else throw FunPayException(msg.ifBlank { "FunPay не оформил заказ." }, FunPayException.Kind.Other)
-            } else {
-                val d = Jsoup.parse(body, "$BASE/")
-                confirmStep(d, action)?.let { BuyOutcome(BuyOutcome.Kind.Confirm, null, "FunPay показал страницу подтверждения заказа.", it) }
-                    ?: run {
+        val t = mutableListOf<String>()
+        val plain = setOf("amount", "method", "type", "gate", "offer_id")
+        t += "Запрос: POST ${redact(action)}; поля: " +
+            payload.joinToString(", ") { if (it.first in plain) "${it.first}=${it.second.take(20)}" else it.first }
+        fun trace() = t.joinToString("\n")
+        try {
+            val outcome: BuyOutcome = try {
+                val body = call(action, formBody(payload), ajax = false, referer = referer, follow = false)
+                t += "Ответ: HTTP $lastStatus, без перенаправления"
+                val j = try { JSONObject(body) } catch (e: Exception) { null }
+                if (j != null) {
+                    t += "Формат ответа: JSON"
+                    val u = j.optString("url")
+                    val msg = j.optString("msg")
+                    if (u.isNotBlank()) classifyBuy(u.let { if (it.startsWith("/")) BASE + it else it }, msg)
+                    else {
+                        t += "В JSON нет адреса перехода: заказ не создан"
+                        throw FunPayException(msg.ifBlank { "FunPay не оформил заказ." }, FunPayException.Kind.Other)
+                    }
+                } else {
+                    val d = Jsoup.parse(body, "$BASE/")
+                    t += "Заголовок страницы: «${d.title().take(80)}»"
+                    val step = confirmStep(d, action)
+                    if (step != null) {
+                        t += "Распознано как шаг подтверждения: на странице форма с offer_id/price_guard. Заказ ещё НЕ создан"
+                        BuyOutcome(BuyOutcome.Kind.Confirm, null, "FunPay показал страницу подтверждения заказа.", step)
+                    } else {
+                        t += "Это не успех: нет перехода на страницу заказа и нет формы подтверждения"
                         val text = (d.selectFirst("div.alert, .alert-danger, p.lead, .error") ?: d.selectFirst("h1") ?: d.selectFirst("title"))?.text()?.take(250).orEmpty()
                         throw FunPayException("Заказ не создан: FunPay вернул страницу вместо подтверждения. ${if (text.isNotBlank()) "Ответ: «$text»." else ""}", FunPayException.Kind.Other)
                     }
+                }
+            } catch (r: RedirectStop) {
+                t += "Ответ: HTTP $lastStatus → переход на ${redact(r.url)}"
+                classifyBuy(r.url, "")
             }
-        } catch (r: RedirectStop) {
-            classifyBuy(r.url, "")
+            when (outcome.kind) {
+                BuyOutcome.Kind.Order -> {
+                    val id = Regex("/orders/([A-Za-z0-9]+)").find(outcome.url.orEmpty())?.groupValues?.get(1).orEmpty()
+                    t += "Распознано как создание заказа: переход на страницу заказа #$id"
+                    val check = try { val b = call(outcome.url!!); lastStatus to b.contains(id, true) } catch (e: FunPayException) { t += "Проверка страницы заказа: ошибка ${e.status ?: ""}"; null }
+                    if (check != null) t += "Проверка страницы заказа: HTTP ${check.first}, номер #$id на странице: ${if (check.second) "найден" else "не найден"}"
+                    return if (check != null && check.second) {
+                        outcome.copy(message = "Заказ #$id создан. Страница заказа открылась и содержит этот номер.", trace = trace())
+                    } else {
+                        BuyOutcome(BuyOutcome.Kind.Unverified, outcome.url, "FunPay перенаправил на заказ #$id, но подтвердить его не удалось. Проверьте раздел «Заказы» и не нажимайте оплату повторно, пока не убедитесь, что заказа нет.", null, trace())
+                    }
+                }
+                BuyOutcome.Kind.Payment -> t += "Распознано как переход к оплате: заказ на этом шаге не подтверждён"
+                else -> Unit
+            }
+            return outcome.copy(trace = trace())
+        } catch (e: FunPayException) {
+            throw FunPayException((e.message ?: "Ошибка FunPay") + "\n[диагностика]\n" + trace(), e.kind, e.status)
         }
-        if (outcome.kind == BuyOutcome.Kind.Order && outcome.url != null) {
-            val confirmed = try { call(outcome.url); true } catch (e: FunPayException) { false }
-            return BuyOutcome(
-                BuyOutcome.Kind.Order, outcome.url,
-                outcome.message + if (confirmed) " Подтверждено FunPay." else " Страницу заказа открыть не удалось, проверьте раздел «Заказы»."
-            )
-        }
-        return outcome
     }
 
     /** Адрес из атрибута action: пустой action означает «тот же адрес, что у страницы», как в браузере. */
@@ -658,6 +693,7 @@ class FunPayClient(goldenKey: String) {
     private fun confirmStep(doc: Document, pageUrl: String): ConfirmStep? {
         val form = doc.select("form")
             .filter { it.selectFirst("input[name=query]") == null && !it.attr("action").contains("setlocale") && it.select("input[name],select[name]").isNotEmpty() }
+            .filter { it.selectFirst("input[name=offer_id], input[name=price_guard]") != null }
             .let { c -> c.firstOrNull { it.attr("action").contains("order") } ?: c.firstOrNull() } ?: return null
         val action = resolveAction(pageUrl, form.attr("action")) ?: return null
         val fields = parseForm(form).mapNotNull { f ->
@@ -680,7 +716,7 @@ class FunPayClient(goldenKey: String) {
     }
 
     private fun classifyBuy(url: String, msg: String): BuyOutcome {
-        val order = Regex("^https://funpay\\.com/orders/([A-Za-z0-9]+)/?$").find(url)
+        val order = Regex("^https://funpay\\.com/orders/([A-Za-z0-9]+)/?(\\?.*)?$").find(url)
         return when {
             order != null -> BuyOutcome(BuyOutcome.Kind.Order, url, msg.ifBlank { "Заказ #${order.groupValues[1]} создан." })
             url.startsWith("https://") -> BuyOutcome(BuyOutcome.Kind.Payment, url, msg.ifBlank { "FunPay просит оплатить или пополнить баланс." })
